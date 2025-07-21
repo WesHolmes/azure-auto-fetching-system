@@ -37,7 +37,7 @@ azure-functions/
 
 ### Prerequisites
 
-- Python 3.8 or later
+- Python 3.12
 - Azure Functions Core Tools
 - Azure AD application with appropriate Graph API permissions
 
@@ -50,7 +50,19 @@ pip install -r requirements.txt
 
 ### 2. Configure Environment
 
-Create or update `local.settings.json`:
+Create a `.env` file for local development:
+
+```bash
+cp .env.sample .env
+# Edit .env with your actual values
+```
+
+Required environment variables:
+- `CLIENT_ID` - Azure AD application client ID
+- `CLIENT_SECRET` - Azure AD application client secret
+- `PARTNER_TENANT_ID` - (Optional) For multi-tenant mode
+
+Or create/update `local.settings.json`:
 
 #### Single Tenant Mode
 

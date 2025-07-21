@@ -8,9 +8,12 @@ def fetch_users(tenant_id):
     graph = GraphClient(tenant_id)
     return graph.get('/users', select=[
         'id', 'displayName', 'userPrincipalName', 'mail',
-        'accountEnabled', 'userType', 'department', 'jobTitle',
+        'accountEnabled', 'userType', 'department', 'jobTitle'
         'signInActivity'
     ])
+
+def fetch_user_licenses(tenant_id):
+    pass
 
 def transform_user_records(users, tenant_id):
     """Transform Graph API users to database records"""
@@ -26,7 +29,7 @@ def transform_user_records(users, tenant_id):
             'user_type': user.get('userType'),
             'department': user.get('department'),
             'job_title': user.get('jobTitle'),
-            'last_sign_in': user.get('signInActivity', {}).get('lastSignInDateTime'),
+            'last_sign_in': None,  # Requires AuditLog.Read.All permission
             'synced_at': datetime.now().isoformat()
         }
         records.append(record)

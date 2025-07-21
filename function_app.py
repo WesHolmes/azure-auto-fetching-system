@@ -17,11 +17,17 @@ def users_sync(timer: func.TimerRequest) -> None:
     tenants = get_tenants()
     for tenant in tenants:
         try:
+            # this is the main data pipeline fxn
             result = sync_users(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
                 logging.info(
                     f"✓ {tenant['name']}: {result['users_synced']} users synced"
                 )
+
+            # add any analysis fxn based on the data populated in the SQL table
+            # result = calculate_inactive_users()
+            # result = calculate_mfa_compliance()
+
             else:
                 logging.error(f"✗ {tenant['name']}: {result['error']}")
         except Exception as e:

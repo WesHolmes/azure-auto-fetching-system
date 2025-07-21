@@ -253,16 +253,16 @@ Example:
 ```python
 # sync/group_sync.py
 def sync_groups(tenant_id: str, tenant_name: str):
-    client = GraphClient(tenant_id, os.getenv('AZURE_CLIENT_ID'), os.getenv('CLIENT_SECRET'))
+    client = GraphClient(tenant_id)
     groups = client.get_all('/groups', select=['id', 'displayName', 'description'])
     # Transform and save to database
 ```
 
-### Testing
+### Python Linter
 
-Run unit tests:
+Run Ruff Linter:
 ```bash
-python -m pytest tests/
+ruff format <<python.py>>
 ```
 
 ## Support

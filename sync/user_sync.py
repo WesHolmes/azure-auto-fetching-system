@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
-from core.graph_client import GraphClient
-from core.database import upsert_many
+from api.integrations.graph_client import GraphClient
+from api.database import upsert_many
 
 def fetch_users(tenant_id):
     """Fetch users from Graph API"""

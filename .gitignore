@@ -139,5 +139,7 @@ __azurite_db*__.json
 .DS_Store
 CLAUDE.md
 .vscode/
-.docs/
 .claude/
+
+docs/
+archive/

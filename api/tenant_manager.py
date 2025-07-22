@@ -1,5 +1,5 @@
 import os
-from core.graph_client import GraphClient
+from api.integrations.graph_client import GraphClient
 
 def get_tenants(tenant_mode="single"):
     if tenant_mode == "single":

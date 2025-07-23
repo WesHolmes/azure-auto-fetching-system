@@ -80,30 +80,30 @@ async def sync_backups(target_date: datetime) -> Dict[str, Any]:
         logger.info(f"Starting backup sync for date: {target_date.strftime('%Y-%m-%d')}")
 
         # Initialize API and SQL clients
-        api = BackupRadarAPI()
-        sql = BackupRadarSQL()
+        async with BackupRadarAPI() as api:
+            sql = BackupRadarSQL()
 
-        # Fetch backup policies from API
-        policies = await api.fetch_active_policies(target_date, target_date, chunk_size_days=1)
-        logger.info(f"Fetched {len(policies)} backup policies")
+            # Fetch backup policies from API
+            policies = await api.fetch_policies(target_date, target_date, chunk_size_days=1)
+            logger.info(f"Fetched {len(policies)} backup policies")
 
-        # Transform to database records
-        records = transform_backup_records(policies)
-        logger.info(f"Transformed to {len(records)} backup records")
+            # Transform to database records
+            records = transform_backup_records(policies)
+            logger.info(f"Transformed to {len(records)} backup records")
 
-        # Save to database
-        if records:
-            processed = sql.upsert_backup_records(records)
-        else:
-            processed = 0
+            # Save to database
+            if records:
+                processed = sql.upsert_backup_records(records)
+            else:
+                processed = 0
 
-        # Return simple summary
-        return {
-            'status': 'success',
-            'date': target_date.strftime('%Y-%m-%d'),
-            'policies_fetched': len(policies),
-            'records_processed': processed
-        }
+            # Return simple summary
+            return {
+                'status': 'success',
+                'date': target_date.strftime('%Y-%m-%d'),
+                'policies_fetched': len(policies),
+                'records_processed': processed
+            }
 
     except Exception as e:
         logger.error(f"Backup sync failed: {str(e)}", exc_info=True)

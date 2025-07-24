@@ -9,6 +9,8 @@ from analysis.user_analysis import (
     calculate_mfa_compliance,
     calculate_license_optimization
 )
+from datetime import datetime
+from core.database import query
 
 app = func.FunctionApp()
 
@@ -145,6 +147,86 @@ def application_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     
     return func.HttpResponse(f"Synced {total} service principals", status_code=200)
 
+# Generate comprehensive user and license report
+@app.schedule(
+    schedule="0 0 6 * * *",  # Daily at 6 AM
+    arg_name="timer", 
+    run_on_startup=False, 
+    use_monitor=False
+)
+def generate_user_report(timer: func.TimerRequest) -> None:
+    """Generate daily JSON report with user analytics and license metrics"""
+    if timer.past_due:
+        logging.warning("User report timer is past due!")
+    
+    tenants = get_tenants()
+    
+    for tenant in tenants:
+        try:
+            tenant_id = tenant["tenant_id"]
+            tenant_name = tenant["name"]
+            
+            logging.info(f"Generating report for {tenant_name}")
+            
+            # Get basic user counts
+            total_users_query = "SELECT COUNT(*) as count FROM users WHERE tenant_id = ?"
+            total_users = query(total_users_query, (tenant_id,))[0]['count']
+            
+            active_users_query = "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND account_enabled = 1"
+            active_users = query(active_users_query, (tenant_id,))[0]['count']
+            
+            inactive_users = total_users - active_users
+            
+            # Get MFA compliance data
+            mfa_result = calculate_mfa_compliance(tenant_id)
+            mfa_compliance_rate = mfa_result.get('compliance_rate', 0)
+            
+            # Get inactive users with licenses data (both disabled accounts and inactive usage)
+            inactive_with_licenses_query = """
+                SELECT COUNT(DISTINCT u.id) as count 
+                FROM users u 
+                INNER JOIN user_licenses ul ON u.id = ul.user_id 
+                WHERE u.tenant_id = ? AND ul.is_active = 0
+            """
+            inactive_users_with_licenses = query(inactive_with_licenses_query, (tenant_id,))[0]['count']
+            
+            # Get license optimization data
+            license_result = calculate_license_optimization(tenant_id)
+            
+            # Build comprehensive report
+            report = {
+                "tenant_name": tenant_name,
+                "tenant_id": tenant_id,
+                "report_date": datetime.now().isoformat(),
+                "user_metrics": {
+                    "total_user_count": total_users,
+                    "active_user_count": active_users,
+                    "inactive_user_count": inactive_users,
+                    "inactive_user_percentage": round((inactive_users / total_users * 100), 1) if total_users > 0 else 0
+                },
+                "security_metrics": {
+                    "mfa_compliance_rate": mfa_compliance_rate,
+                    "mfa_enabled_users": mfa_result.get('mfa_enabled', 0),
+                    "non_compliant_users": mfa_result.get('non_compliant', 0),
+                    "risk_level": mfa_result.get('risk_level', 'unknown')
+                },
+                "license_metrics": {
+                    "inactive_users_with_licenses": inactive_users_with_licenses,
+                    "license_utilization_rate": license_result.get('utilization_rate', 0),
+                    "estimated_monthly_savings": license_result.get('estimated_monthly_savings', 0),
+                    "underutilized_licenses": license_result.get('underutilized_licenses', 0)
+                }
+            }
+            
+            # Log the report
+            logging.info(f"  Report for {tenant_name}:")
+            logging.info(f"    Users: {total_users} total, {inactive_users} inactive ({round((inactive_users / total_users * 100), 1) if total_users > 0 else 0}%)")
+            logging.info(f"    MFA: {mfa_compliance_rate}% compliance")
+            logging.info(f"    Licenses: {inactive_users_with_licenses} inactive users with licenses")
+            logging.info(f"    Potential savings: ${license_result.get('estimated_monthly_savings', 0)}/month")
+            
+        except Exception as e:
+            logging.error(f"Failed to generate report for {tenant_name}: {str(e)}")
 
 # ask cursor to generate a timer trigger function that pulls from users database and generates a json report that includes the following:
 # total user count, total inactive user count, total mfa compliance rate, how many inactive users with inactive licenses rate

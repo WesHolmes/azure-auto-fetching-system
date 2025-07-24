@@ -21,7 +21,7 @@ def fetch_users(tenant_id):
                 'lastPasswordChangeDateTime'
             ],
             expand='manager($select=id,displayName)',
-            top=999
+            top=20
         )
         
         logger.info(f"Successfully fetched {len(users)} users for tenant {tenant_id}")

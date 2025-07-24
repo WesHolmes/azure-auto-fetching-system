@@ -263,3 +263,69 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
             'error': str(e),
             'tenant_id': tenant_id
         }
+
+def fix_inactive_user_licenses(tenant_id: str) -> Dict[str, Any]:
+    """
+    Retroactively mark licenses as inactive for users who are disabled
+    but still have active license records from before they were disabled.
+    """
+    try:
+        logger.info(f"Starting retroactive license fix for tenant {tenant_id}")
+        
+        # Find inactive users who still have active license records
+        query_sql = """
+        SELECT DISTINCT u.id, u.user_principal_name, u.account_enabled
+        FROM users u
+        INNER JOIN user_licenses ul ON u.id = ul.user_id
+        WHERE u.tenant_id = ? 
+        AND u.account_enabled = 0 
+        AND ul.is_active = 1
+        """
+        
+        inactive_users_with_active_licenses = query(query_sql, (tenant_id,))
+        
+        if not inactive_users_with_active_licenses:
+            logger.info("No inactive users with active licenses found")
+            return {
+                'status': 'success',
+                'tenant_id': tenant_id,
+                'users_updated': 0,
+                'message': 'No inactive users with active licenses found'
+            }
+        
+        # Update their license records to mark as inactive
+        updated_count = 0
+        for user in inactive_users_with_active_licenses:
+            rows_updated = execute_query("""
+                UPDATE user_licenses 
+                SET is_active = 0, 
+                    unassigned_date = ?,
+                    last_update = ?
+                WHERE user_id = ? AND tenant_id = ? AND is_active = 1
+            """, (
+                datetime.now(timezone.utc).isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+                user['id'],
+                tenant_id
+            ))
+            
+            if rows_updated > 0:
+                updated_count += 1
+                logger.info(f"Marked {rows_updated} licenses as inactive for user: {user['user_principal_name']}")
+        
+        logger.info(f"Fixed licenses for {updated_count} inactive users")
+        
+        return {
+            'status': 'success',
+            'tenant_id': tenant_id,
+            'users_updated': updated_count,
+            'licenses_marked_inactive': sum(query("SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ? AND is_active = 0", (tenant_id,))[0].values())
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fixing inactive user licenses: {str(e)}")
+        return {
+            'status': 'error',
+            'error': str(e),
+            'tenant_id': tenant_id
+        }

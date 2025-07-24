@@ -1,8 +1,8 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from core.graph_client import GraphClient
-from core.database import upsert_many, query
+from core.database import upsert_many, query, execute_query
 
 logger = logging.getLogger(__name__)
 
@@ -182,8 +182,40 @@ def sync_licenses(tenant_id, tenant_name):
                                      license_info.get('license_partnumber') or 
                                      'UNKNOWN')
                     
-                    # Each license assignment is active if user account is enabled
-                    is_license_active = 1 if user_account_enabled else 0
+                    # Determine if license should be considered active
+                    # Consider inactive if:
+                    # 1. Account is disabled, OR
+                    # 2. Account is enabled but user hasn't signed in for 90+ days
+                    is_license_active = 1
+                    
+                    if not user_account_enabled:
+                        # Account is disabled
+                        is_license_active = 0
+                    else:
+                        # Account is enabled, check activity
+                        # Get user's last sign-in from users table
+                        user_activity = query("""
+                            SELECT last_sign_in 
+                            FROM users 
+                            WHERE id = ? AND tenant_id = ?
+                        """, (user_id, tenant_id))
+                        
+                        if user_activity:
+                            last_sign_in = user_activity[0].get('last_sign_in')
+                            if last_sign_in:
+                                try:
+                                    last_signin_date = datetime.fromisoformat(last_sign_in)
+                                    cutoff_date = datetime.now(timezone.utc) - timedelta(days=90)
+                                    
+                                    if last_signin_date < cutoff_date:
+                                        # User hasn't signed in for 90+ days - consider license inactive
+                                        is_license_active = 0
+                                except:
+                                    # If we can't parse the date, assume active
+                                    pass
+                            else:
+                                # Never signed in - consider license inactive
+                                is_license_active = 0
                     
                     user_license_record = {
                         'tenant_id': tenant_id,
@@ -204,14 +236,55 @@ def sync_licenses(tenant_id, tenant_name):
         if user_license_records:
             upsert_many('user_licenses', user_license_records)
             logger.info(f"Stored {len(user_license_records)} user license assignments from {users_with_licenses} users")
+            
+        # Check for users who previously had licenses but no longer have assignments
+        # This catches users who were disabled and had their licenses removed by Microsoft
+        existing_license_users = query("""
+            SELECT DISTINCT user_id, user_principal_name 
+            FROM user_licenses 
+            WHERE tenant_id = ?
+        """, (tenant_id,))
+        
+        current_user_ids = {user.get('id') for user in all_users if user.get('assignedLicenses')}
+        
+        # Find users who had licenses before but don't now (likely disabled)
+        users_to_check = []
+        for existing_user in existing_license_users:
+            if existing_user['user_id'] not in current_user_ids:
+                users_to_check.append(existing_user['user_id'])
+        
+        # For these users, check if they're now inactive and mark their licenses accordingly
+        if users_to_check:
+            user_status_query = f"""
+                SELECT id, account_enabled, user_principal_name
+                FROM users 
+                WHERE id IN ({','.join(['?' for _ in users_to_check])})
+                AND tenant_id = ?
+            """
+            user_statuses = query(user_status_query, users_to_check + [tenant_id])
+            
+            for user_status in user_statuses:
+                if not user_status['account_enabled']:  # User is now inactive
+                    # Update their existing license records to mark as inactive
+                    execute_query("""
+                        UPDATE user_licenses 
+                        SET is_active = 0, 
+                            unassigned_date = ?,
+                            last_update = ?
+                        WHERE user_id = ? AND tenant_id = ? AND is_active = 1
+                    """, (
+                        datetime.now().isoformat(),
+                        datetime.now().isoformat(), 
+                        user_status['id'], 
+                        tenant_id
+                    ))
+                    logger.info(f"Marked licenses as inactive for disabled user: {user_status['user_principal_name']}")
         
         return {
             'status': 'success',
-            'tenant_id': tenant_id,
-            'tenant_name': tenant_name,
-            'licenses_synced': len(license_lookup),
-            'user_licenses_synced': len(user_license_records),
-            'users_with_licenses': users_with_licenses
+            'tenant_licenses': len(license_records) if 'license_records' in locals() else 0,
+            'user_licenses': len(user_license_records),
+            'inactive_licenses_updated': len(users_to_check) if users_to_check else 0
         }
         
     except Exception as e:

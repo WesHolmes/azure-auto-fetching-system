@@ -34,7 +34,7 @@ class GraphClient:
         else:
             raise Exception(f"Token acquisition failed: {result.get('error', 'Unknown error')}")
 
-    def get(self, endpoint, select=None, expand=None, filter=None, count=False, top=999, order_by=None):
+    def get(self, endpoint, select=None, expand=None, filter=None, count=False, top=None, order_by=None):
         params = {}
         if select:
             params["$select"] = ",".join(select)
@@ -60,7 +60,9 @@ class GraphClient:
         all_results = []
 
         while url:
-            response = requests.get(url, headers=headers, params=params if not all_results else None)
+            # Only use params for the first request, pagination URLs already include parameters
+            current_params = params if not all_results else None
+            response = requests.get(url, headers=headers, params=current_params)
 
             if response.status_code == 429:
                 time.sleep(int(response.headers.get("Retry-After", 5)))
@@ -71,6 +73,10 @@ class GraphClient:
 
             results = data.get("value", [])
             all_results.extend(results)
+
+            # If top parameter was specified, respect it and don't follow pagination
+            if top and len(all_results) >= top:
+                return all_results[:top]
 
             url = data.get("@odata.nextLink")
 

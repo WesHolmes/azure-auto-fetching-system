@@ -27,7 +27,7 @@ def calculate_inactive_users(tenant_id: str, days: int = 90) -> Dict[str, Any]:
         query_sql = """
         SELECT 
             id, display_name, user_principal_name, account_enabled,
-            last_sign_in, created_date, license_count, is_admin
+            last_sign_in, license_count, is_admin
         FROM users 
         WHERE tenant_id = ? AND account_enabled = 1
         """
@@ -85,9 +85,6 @@ def calculate_inactive_users(tenant_id: str, days: int = 90) -> Dict[str, Any]:
             'inactive_users': inactive_users[:10]  # top 10 for summary report
         }
         
-        # persist analysis results to database for historical tracking
-        store_analysis_results('inactive_users', tenant_id, result)
-        
         return result
         
     except Exception as e:
@@ -102,7 +99,6 @@ def calculate_mfa_compliance(tenant_id: str) -> Dict[str, Any]:
     """
     calculate multi-factor authentication compliance across users
     identifies security risks from non-mfa users, especially admins
-
     
     returns:
         dictionary with mfa compliance metrics and risk assessment
@@ -114,7 +110,7 @@ def calculate_mfa_compliance(tenant_id: str) -> Dict[str, Any]:
         query_sql = """
         SELECT 
             id, display_name, user_principal_name, 
-            is_mfa_registered, is_admin, account_enabled
+            is_mfa_compliant, is_admin, account_enabled
         FROM users 
         WHERE tenant_id = ? AND account_enabled = 1
         """
@@ -130,7 +126,7 @@ def calculate_mfa_compliance(tenant_id: str) -> Dict[str, Any]:
         
         # categorize users by mfa compliance status
         for user in users:
-            if user.get('is_mfa_registered', False):
+            if user.get('is_mfa_compliant', False):
                 # user has mfa enabled - compliant
                 compliant.append(user)
             else:
@@ -161,9 +157,6 @@ def calculate_mfa_compliance(tenant_id: str) -> Dict[str, Any]:
             'critical_users': admin_non_compliant[:10]  # top 10 admin users without mfa - security priority
         }
         
-        # store compliance analysis results
-        store_analysis_results('mfa_compliance', tenant_id, result)
-        
         return result
         
     except Exception as e:
@@ -193,7 +186,7 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
         query_sql = """
         SELECT 
             id, display_name, user_principal_name, last_sign_in,
-            account_enabled, user_type, created_date
+            account_enabled, user_type, license_count
         FROM users
         WHERE tenant_id = ? AND account_enabled = 1
         """
@@ -261,9 +254,6 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
             'optimization_score': round(utilization_rate, 0)  # simple score based on utilization
         }
         
-        # persist optimization analysis results
-        store_analysis_results('license_optimization', tenant_id, result)
-        
         return result
         
     except Exception as e:
@@ -273,49 +263,3 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
             'error': str(e),
             'tenant_id': tenant_id
         }
-
-def store_analysis_results(analysis_type: str, tenant_id: str, results: Dict[str, Any]):
-    """
-    persist analysis results to database for historical tracking and reporting
-    creates analysis_results table if it doesn't exist (azure functions best practice)
-    
-    args:
-        analysis_type: type of analysis (inactive_users, mfa_compliance, license_optimization)
-        tenant_id: microsoft tenant identifier
-        results: analysis results dictionary to store
-    """
-    try:
-        logger.debug(f"storing {analysis_type} analysis results for tenant {tenant_id}")
-        
-        # create analysis results table if it doesn't exist
-        # using if not exists for azure functions cold start scenarios
-        create_table_sql = """
-        CREATE TABLE IF NOT EXISTS analysis_results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tenant_id TEXT NOT NULL,
-            analysis_type TEXT NOT NULL,
-            results TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            INDEX idx_tenant_analysis (tenant_id, analysis_type),
-            INDEX idx_created_at (created_at)
-        )
-        """
-        execute_query(create_table_sql)
-        
-        # insert analysis results with proper parameterization
-        insert_sql = """
-        INSERT INTO analysis_results (tenant_id, analysis_type, results, created_at)
-        VALUES (?, ?, ?, ?)
-        """
-        execute_query(insert_sql, (
-            tenant_id,
-            analysis_type,
-            json.dumps(results),  # serialize results as json
-            datetime.now(timezone.utc).isoformat()
-        ))
-        
-        logger.debug(f"successfully stored {analysis_type} analysis results")
-        
-    except Exception as e:
-        # log error but don't fail the analysis if storage fails
-        logger.error(f"failed to store analysis results: {str(e)}")

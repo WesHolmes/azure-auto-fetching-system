@@ -5,6 +5,5 @@
     "azureFunctions.projectLanguage": "Python",
     "azureFunctions.projectRuntime": "~4",
     "debug.internalConsoleOptions": "neverOpen",
-    "azureFunctions.projectLanguageModel": 2,
-    "sqlite.sqlite3": "/usr/bin/sqlite3"
+    "azureFunctions.projectLanguageModel": 2
 }

@@ -1,19 +1,20 @@
 import os
 from core.graph_client import GraphClient
 
-def get_tenants(tenant_mode="single"):
+def get_tenants(tenant_mode=None):
+    # Auto-detect tenant mode from environment variable if not specified
+    if tenant_mode is None:
+        tenant_mode = os.getenv('TENANT_MODE', 'single').lower()
+    
     if tenant_mode == "single":
         return [{
-            'tenant_id': "3aae0fb1-276f-42f8-8e4d-36ca10cbb779",  # Fixed: Added missing character
+            'tenant_id': "3aae0fb1-276f-42f8-8e4d-36ca10cbb779",
             'name': "warp2"
         }]
 
     # Multi-tenant: fetch customer tenants from contracts
-    client = GraphClient(
-    os.getenv('PARTNER_TENANT_ID'),
-        os.getenv('CLIENT_ID'),
-        os.getenv('CLIENT_SECRET')
-    )
+    # GraphClient only needs tenant_id - it gets CLIENT_ID and CLIENT_SECRET from env vars
+    client = GraphClient(os.getenv('PARTNER_TENANT_ID'))
 
     contracts = client.get('/contracts')
     return [

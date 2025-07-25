@@ -57,7 +57,7 @@ def calculate_inactive_users(tenant_id: str, days: int = 90) -> Dict[str, Any]:
                         'display_name': user['display_name'],
                         'user_principal_name': user['user_principal_name'],
                         'days_inactive': days_inactive,
-                        'potential_savings': user.get('license_count', 0) * 15  # $15 per license estimate
+                        'license_count': user.get('license_count', 0)
                     })
                 else:
                     # user is active - signed in within threshold
@@ -66,9 +66,20 @@ def calculate_inactive_users(tenant_id: str, days: int = 90) -> Dict[str, Any]:
                 # user has never signed in - potential cleanup candidate
                 never_signed_in.append(user)
         
-        # calculate total potential cost savings from inactive licenses
-        total_inactive_licenses = sum(u.get('license_count', 0) for u in inactive_users)
-        monthly_savings = total_inactive_licenses * 15  # estimate $15 per license per month
+        # Calculate actual potential cost savings using real license costs
+        inactive_user_ids = [u['user_id'] for u in inactive_users]
+        if inactive_user_ids:
+            # Get actual monthly costs for inactive users' licenses
+            placeholders = ','.join(['?' for _ in inactive_user_ids])
+            inactive_cost_query = f"""
+            SELECT SUM(monthly_cost) as total_cost
+            FROM user_licenses 
+            WHERE user_id IN ({placeholders}) AND tenant_id = ?
+            """
+            cost_result = query(inactive_cost_query, inactive_user_ids + [tenant_id])
+            monthly_savings = cost_result[0]['total_cost'] if cost_result and cost_result[0]['total_cost'] else 0
+        else:
+            monthly_savings = 0
         
         logger.info(f"analysis complete: {len(inactive_users)} inactive, {len(active_users)} active, {len(never_signed_in)} never signed in")
         
@@ -117,7 +128,7 @@ def calculate_mfa_compliance(tenant_id: str) -> Dict[str, Any]:
         
         # execute parameterized query
         users = query(query_sql, (tenant_id,))
-        logger.info(f"analyzing mfa status for {len(users)} active users")
+        # logger.info(f"analyzing mfa status for {len(users)} active users")
         
         # initialize lists for compliance categorization
         compliant = []
@@ -141,8 +152,8 @@ def calculate_mfa_compliance(tenant_id: str) -> Dict[str, Any]:
         total_users = len(users)
         compliance_rate = (len(compliant) / total_users * 100) if total_users > 0 else 0
         
-        logger.info(f"mfa compliance rate: {compliance_rate:.1f}% ({len(compliant)}/{total_users})")
-        logger.warning(f"critical: {len(admin_non_compliant)} admin users without mfa")
+        # logger.info(f"mfa compliance rate: {compliance_rate:.1f}% ({len(compliant)}/{total_users})")
+        # logger.warning(f"critical: {len(admin_non_compliant)} admin users without mfa")
         
         # prepare comprehensive compliance report
         result = {
@@ -179,7 +190,7 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
         dictionary with license usage analysis and cost optimization recommendations
     """
     try:
-        logger.info(f"starting license optimization analysis for tenant {tenant_id}")
+        #logger.info(f"starting license optimization analysis for tenant {tenant_id}")
         
         # simplified query without license table dependency
         # focuses on user activity patterns to estimate license utilization
@@ -193,7 +204,7 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
         
         # execute query to get user activity data
         users = query(query_sql, (tenant_id,))
-        logger.info(f"analyzing license optimization for {len(users)} active users")
+        #logger.info(f"analyzing license optimization for {len(users)} active users")
         
         # categorize users by usage patterns for license optimization
         active_users = 0
@@ -225,17 +236,36 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
                 # user never signed in - license potentially wasted
                 never_signed_in += 1
         
-        # calculate optimization metrics
+        # Calculate optimization metrics using actual license costs
         total_paid_users = len(users) - guest_users
         underutilized_licenses = inactive_users + never_signed_in
         utilization_rate = (active_users / total_paid_users * 100) if total_paid_users > 0 else 0
         
-        # estimate cost savings (using industry average of $15 per license per month)
-        estimated_monthly_savings = underutilized_licenses * 15
-        estimated_annual_savings = estimated_monthly_savings * 12
+        # Calculate actual cost savings using real license costs from database
+        # Get actual monthly costs for underutilized licenses
+        underutilized_cost_query = """
+        SELECT SUM(ul.monthly_cost) as total_cost
+        FROM users u
+        INNER JOIN user_licenses ul ON u.id = ul.user_id
+        WHERE u.tenant_id = ? 
+        AND u.account_enabled = 1
+        AND (u.last_sign_in IS NULL OR datetime(u.last_sign_in) < datetime('now', '-90 days'))
+        """
         
-        logger.info(f"license utilization: {utilization_rate:.1f}% ({active_users}/{total_paid_users})")
-        logger.info(f"potential monthly savings: ${estimated_monthly_savings}")
+        cost_result = query(underutilized_cost_query, (tenant_id,))
+        actual_monthly_savings = cost_result[0]['total_cost'] if cost_result and cost_result[0]['total_cost'] else 0
+        actual_annual_savings = actual_monthly_savings * 12
+        
+        # Fallback estimate if no cost data available
+        if actual_monthly_savings == 0 and underutilized_licenses > 0:
+            estimated_monthly_savings = underutilized_licenses * 15  # Fallback estimate
+            estimated_annual_savings = estimated_monthly_savings * 12
+        else:
+            estimated_monthly_savings = actual_monthly_savings
+            estimated_annual_savings = actual_annual_savings
+        
+        # logger.info(f"license utilization: {utilization_rate:.1f}% ({active_users}/{total_paid_users})")
+        # logger.info(f"potential monthly savings: ${estimated_monthly_savings}")
         
         # prepare comprehensive optimization report
         result = {

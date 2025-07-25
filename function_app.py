@@ -29,11 +29,17 @@ def users_sync(timer: func.TimerRequest) -> None:
         logging.warning("User sync timer is past due!")
     
     tenants = get_tenants()  # Automatically uses TENANT_MODE environment variable
+    success_count = 0
+    error_count = 0
+    auth_error_tenants = []
+    permission_error_tenants = []
+    
     for tenant in tenants:
         try:
             # Main data sync
             result = sync_users(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
+                success_count += 1
                 logging.info(
                     f"✓ {tenant['name']}: {result['users_synced']} users synced"
                 )
@@ -50,9 +56,40 @@ def users_sync(timer: func.TimerRequest) -> None:
                     logging.error(f"Analysis error: {str(e)}")
                     
             else:
-                logging.error(f"✗ {tenant['name']}: {result['error']}")
+                error_count += 1
+                error_msg = result.get('error', 'Unknown error')
+                
+                # Categorize errors for better reporting
+                if "Authorization_IdentityNotFound" in error_msg:
+                    auth_error_tenants.append(tenant['name'])
+                    logging.warning(f"🔑 {tenant['name']}: Needs admin consent")
+                elif "403" in error_msg or "Forbidden" in error_msg:
+                    permission_error_tenants.append(tenant['name'])
+                    logging.warning(f"🚫 {tenant['name']}: Insufficient permissions")
+                else:
+                    logging.error(f"✗ {tenant['name']}: {error_msg}")
+                    
         except Exception as e:
-            logging.error(f"✗ {tenant['name']}: {str(e)}")
+            error_count += 1
+            error_msg = str(e)
+            if "Authorization_IdentityNotFound" in error_msg:
+                auth_error_tenants.append(tenant['name'])
+                logging.warning(f"🔑 {tenant['name']}: Needs admin consent")
+            elif "403" in error_msg or "Forbidden" in error_msg:
+                permission_error_tenants.append(tenant['name'])
+                logging.warning(f"🚫 {tenant['name']}: Insufficient permissions")
+            else:
+                logging.error(f"✗ {tenant['name']}: {error_msg}")
+    
+    # Summary report
+    total_tenants = len(tenants)
+    logging.info(f"📊 User Sync Summary: {success_count}/{total_tenants} successful")
+    
+    if auth_error_tenants:
+        logging.warning(f"🔑 Need admin consent ({len(auth_error_tenants)}): {', '.join(auth_error_tenants[:5])}{'...' if len(auth_error_tenants) > 5 else ''}")
+    
+    if permission_error_tenants:
+        logging.warning(f"🚫 Need permissions ({len(permission_error_tenants)}): {', '.join(permission_error_tenants[:5])}{'...' if len(permission_error_tenants) > 5 else ''}")
 
 @app.schedule(
     schedule="0 30 * * * *",  # 30 minutes after user sync
@@ -65,17 +102,54 @@ def licenses_sync(timer: func.TimerRequest) -> None:
         logging.warning("License sync timer is past due!")
     
     tenants = get_tenants()  # Automatically uses TENANT_MODE environment variable
+    success_count = 0
+    error_count = 0
+    auth_error_tenants = []
+    permission_error_tenants = []
+    
     for tenant in tenants:
         try:
             result = sync_licenses(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
+                success_count += 1
                 logging.info(
-                    f"✓ {tenant['name']}: {result['licenses_synced']} licenses synced"
+                    f"✓ {tenant['name']}: {result['licenses_synced']} licenses, {result['user_licenses_synced']} assignments synced"
                 )
             else:
-                logging.error(f"✗ {tenant['name']}: {result['error']}")
+                error_count += 1
+                error_msg = result.get('error', 'Unknown error')
+                
+                # Categorize errors for better reporting
+                if "Authorization_IdentityNotFound" in error_msg:
+                    auth_error_tenants.append(tenant['name'])
+                    logging.warning(f"🔑 {tenant['name']}: Needs admin consent")
+                elif "403" in error_msg or "Forbidden" in error_msg:
+                    permission_error_tenants.append(tenant['name'])
+                    logging.warning(f"🚫 {tenant['name']}: Insufficient permissions")
+                else:
+                    logging.error(f"✗ {tenant['name']}: {error_msg}")
+                    
         except Exception as e:
-            logging.error(f"✗ {tenant['name']}: {str(e)}")
+            error_count += 1
+            error_msg = str(e)
+            if "Authorization_IdentityNotFound" in error_msg:
+                auth_error_tenants.append(tenant['name'])
+                logging.warning(f"🔑 {tenant['name']}: Needs admin consent")
+            elif "403" in error_msg or "Forbidden" in error_msg:
+                permission_error_tenants.append(tenant['name'])
+                logging.warning(f"🚫 {tenant['name']}: Insufficient permissions")
+            else:
+                logging.error(f"✗ {tenant['name']}: {error_msg}")
+    
+    # Summary report
+    total_tenants = len(tenants)
+    logging.info(f"📊 License Sync Summary: {success_count}/{total_tenants} successful")
+    
+    if auth_error_tenants:
+        logging.warning(f"🔑 Need admin consent ({len(auth_error_tenants)}): {', '.join(auth_error_tenants[:5])}{'...' if len(auth_error_tenants) > 5 else ''}")
+    
+    if permission_error_tenants:
+        logging.warning(f"🚫 Need permissions ({len(permission_error_tenants)}): {', '.join(permission_error_tenants[:5])}{'...' if len(permission_error_tenants) > 5 else ''}")
 
 @app.schedule(
     schedule="0 0 0 * * *", 

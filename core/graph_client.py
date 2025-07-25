@@ -2,6 +2,7 @@ import time
 import requests
 import msal
 import os
+import logging
 
 class GraphClient:
     def __init__(self, tenant_id):
@@ -68,6 +69,35 @@ class GraphClient:
                 time.sleep(int(response.headers.get("Retry-After", 5)))
                 continue
 
+            # Enhanced error handling with detailed diagnostics
+            if response.status_code == 401:
+                error_msg = f"401 Unauthorized - Tenant {self.tenant_id}: Authentication failed. "
+                try:
+                    error_details = response.json()
+                    if 'error' in error_details:
+                        error_msg += f"Error: {error_details['error'].get('code', 'Unknown')} - {error_details['error'].get('message', 'No details')}"
+                except:
+                    error_msg += "Likely causes: Missing admin consent, expired credentials, or tenant suspended."
+                logging.error(error_msg)
+                raise requests.exceptions.HTTPError(error_msg, response=response)
+            
+            elif response.status_code == 403:
+                error_msg = f"403 Forbidden - Tenant {self.tenant_id}: Insufficient permissions. "
+                try:
+                    error_details = response.json()
+                    if 'error' in error_details:
+                        error_msg += f"Error: {error_details['error'].get('code', 'Unknown')} - {error_details['error'].get('message', 'No details')}"
+                except:
+                    error_msg += "Likely causes: Missing Graph permissions, conditional access policies, or security defaults."
+                logging.error(error_msg)
+                raise requests.exceptions.HTTPError(error_msg, response=response)
+            
+            elif response.status_code == 503:
+                error_msg = f"503 Service Unavailable - Tenant {self.tenant_id}: Microsoft Graph service temporarily unavailable."
+                logging.warning(error_msg + " Retrying after delay...")
+                time.sleep(30)  # Wait longer for service issues
+                continue
+            
             response.raise_for_status()
             data = response.json()
 

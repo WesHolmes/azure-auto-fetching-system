@@ -282,8 +282,8 @@ def sync_licenses(tenant_id, tenant_name):
         
         return {
             'status': 'success',
-            'tenant_licenses': len(license_records) if 'license_records' in locals() else 0,
-            'user_licenses': len(user_license_records),
+            'licenses_synced': len(license_records) if 'license_records' in locals() else 0,
+            'user_licenses_synced': len(user_license_records),
             'inactive_licenses_updated': len(users_to_check) if users_to_check else 0
         }
         

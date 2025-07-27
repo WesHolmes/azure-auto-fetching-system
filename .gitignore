@@ -133,8 +133,8 @@ __blobstorage__
 __queuestorage__
 __azurite_db*__.json
 .python_packages
-AzuriteConfig
 
+AzuriteConfig
 
 .DS_Store
 CLAUDE.md

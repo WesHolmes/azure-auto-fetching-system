@@ -2,4 +2,4 @@
 alwaysApply: true
 ---
 implement the most simple yet elegant solution.
-minimize boilerplate and unessessary complexity(e.g. minimal abstractions).
+minimize boilerplate and unneccesary complexity (e.g. minimal abstractions).

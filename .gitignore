@@ -138,8 +138,11 @@ AzuriteConfig
 
 .DS_Store
 CLAUDE.md
-.vscode/
+
 graph_sync.db
 
 .docs/
 .claude/
+
+# VS Code settings
+.vscode/

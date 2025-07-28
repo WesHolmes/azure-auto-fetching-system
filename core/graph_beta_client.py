@@ -7,10 +7,10 @@ import logging
 # Note: time.sleep() is acceptable here because:
 # 1. Azure Functions handles scaling automatically
 # 2. These are legitimate API rate limits that must be respected
-# 3. The GraphClient is synchronous by design
+# 3. The GraphBetaClient is synchronous by design
 
 
-class GraphClient:
+class GraphBetaClient:
     def __init__(self, tenant_id):
         if not tenant_id:
             raise ValueError("TenantID is needed")
@@ -18,7 +18,7 @@ class GraphClient:
         self.tenant_id = tenant_id
         self.client_id = os.getenv("CLIENT_ID")
         self.client_secret = os.getenv("CLIENT_SECRET")
-        self.base_url = "https://graph.microsoft.com/v1.0"
+        self.base_url = "https://graph.microsoft.com/beta"
         self.token = None
         self.token_expires = 0
 

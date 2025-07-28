@@ -4,20 +4,23 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 def get_connection():
     """Get database connection"""
-    path = os.getenv('DATABASE_PATH', './data/graph_sync.db')
+    path = os.getenv("DATABASE_PATH", "./data/graph_sync.db")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     return sqlite3.connect(path)
+
 
 def init_schema():
     """Initialize database schema - simple and clean"""
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     try:
         # Users table
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT,
                 tenant_id TEXT,
@@ -36,10 +39,12 @@ def init_schema():
                 synced_at TEXT,
                 PRIMARY KEY (id, tenant_id)
             )
-        """)
-        
+        """
+        )
+
         # Service principals table
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS service_principals (
                 id TEXT,
                 tenant_id TEXT,
@@ -47,13 +52,20 @@ def init_schema():
                 display_name TEXT,
                 publisher_name TEXT,
                 service_principal_type TEXT,
+                owners TEXT,
+                credential_exp_date TEXT,
+                credential_type TEXT,
+                enabled_sp BOOLEAN DEFAULT 0,
+                last_sign_in TEXT,
                 synced_at TEXT,
                 PRIMARY KEY (id, tenant_id)
             )
-        """)
-        
+        """
+        )
+
         # Licenses table (tenant-level)
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS licenses (
                 tenant_id TEXT,
                 license_id TEXT,
@@ -68,10 +80,12 @@ def init_schema():
                 last_update TEXT,
                 PRIMARY KEY (tenant_id, license_id)
             )
-        """)
-        
+        """
+        )
+
         # User licenses table
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS user_licenses (
                 tenant_id TEXT,
                 user_id TEXT,
@@ -86,16 +100,23 @@ def init_schema():
                 last_update TEXT,
                 PRIMARY KEY (tenant_id, user_id, license_id)
             )
-        """)
-        
+        """
+        )
+
         # Basic indexes only
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_licenses_tenant ON licenses(tenant_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_licenses_tenant ON user_licenses(tenant_id)")
-        
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_licenses_tenant ON licenses(tenant_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_licenses_tenant ON user_licenses(tenant_id)"
+        )
+
         conn.commit()
         logger.info("Database schema initialized")
-        
+
     except Exception as e:
         conn.rollback()
         logger.error(f"Failed to initialize schema: {str(e)}")
@@ -103,28 +124,29 @@ def init_schema():
     finally:
         conn.close()
 
+
 def upsert_many(table, records):
     """Insert or update multiple records"""
     if not records:
         return 0
-    
+
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     try:
         columns = list(records[0].keys())
-        placeholders = ','.join(['?' for _ in columns])
+        placeholders = ",".join(["?" for _ in columns])
         query = f"INSERT OR REPLACE INTO {table} ({','.join(columns)}) VALUES ({placeholders})"
-        
+
         inserted = 0
         for record in records:
             values = [record.get(col) for col in columns]
             cursor.execute(query, values)
             inserted += 1
-        
+
         conn.commit()
         return inserted
-        
+
     except Exception as e:
         conn.rollback()
         logger.error(f"Failed to upsert records: {str(e)}")
@@ -132,47 +154,50 @@ def upsert_many(table, records):
     finally:
         conn.close()
 
+
 def query(sql, params=None):
     """Execute a SELECT query"""
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    
+
     try:
         if params:
             cursor.execute(sql, params)
         else:
             cursor.execute(sql)
-        
+
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
-        
+
     except Exception as e:
         logger.error(f"Query failed: {str(e)}")
         raise
     finally:
         conn.close()
 
+
 def execute_query(sql, params=None):
     """Execute an INSERT/UPDATE/DELETE query"""
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     try:
         if params:
             cursor.execute(sql, params)
         else:
             cursor.execute(sql)
-        
+
         conn.commit()
         return cursor.rowcount
-        
+
     except Exception as e:
         conn.rollback()
         logger.error(f"Execute query failed: {str(e)}")
         raise
     finally:
         conn.close()
+
 
 # Initialize schema when module loads
 init_schema()

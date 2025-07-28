@@ -1,1 +1,1 @@
-# Analytics module for service principal analysis 
+# Analytics module for service principal analysis

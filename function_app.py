@@ -278,36 +278,155 @@ def generate_user_report(timer: func.TimerRequest) -> None:
     logging.info(f"Starting report generation for {total_tenants} tenants")
 
     try:
-        # Process tenants
-        completed_reports = []
+        # Process tenants and build JSON summaries
+        tenant_summaries = []
         failed_reports = []
 
         for tenant in tenants:
             try:
-                result = process_tenant_report(tenant)
-                if result.get("status") == "success":
-                    completed_reports.append(result)
-                else:
-                    failed_reports.append(result)
+                tenant_id = tenant["tenant_id"]
+                tenant_name = tenant["name"]
+                
+                # Get basic user counts
+                total_users_result = query(
+                    "SELECT COUNT(*) as count FROM users WHERE tenant_id = ?", (tenant_id,)
+                )
+                active_users_result = query(
+                    "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND account_enabled = 1",
+                    (tenant_id,),
+                )
+
+                
+                # Get analysis results
+                mfa_result = calculate_mfa_compliance(tenant_id)
+                license_result = calculate_license_optimization(tenant_id)
+                
+                # Calculate metrics
+                total_users = total_users_result[0]["count"] if total_users_result else 0
+                active_users = active_users_result[0]["count"] if active_users_result else 0
+                inactive_users = total_users - active_users
+                
+                # Generate critical warnings and alerts
+                warnings = []
+                alerts = {
+                    "critical": [],
+                    "warning": [],
+                    "info": []
+                }
+                
+                # MFA Security Alerts
+                mfa_compliance = mfa_result.get("compliance_rate", 0)
+                admin_non_compliant = mfa_result.get("admin_non_compliant", 0)
+                
+                if admin_non_compliant > 0:
+                    critical_msg = f"  CRITICAL: {admin_non_compliant} admin users without MFA - HIGH SECURITY RISK"
+                    warnings.append(critical_msg)
+                    alerts["critical"].append({
+                        "type": "mfa_admin_risk",
+                        "message": f"{admin_non_compliant} admin users without MFA",
+                        "severity": "critical",
+                        "affected_count": admin_non_compliant
+                    })
+                
+                if mfa_compliance < 50:
+                    warning_msg = f"  WARNING: Low MFA compliance ({mfa_compliance}%) - Security risk"
+                    warnings.append(warning_msg)
+                    alerts["warning"].append({
+                        "type": "low_mfa_compliance", 
+                        "message": f"MFA compliance only {mfa_compliance}%",
+                        "severity": "warning",
+                        "compliance_rate": mfa_compliance
+                    })
+                
+                # License Cost Alerts
+                monthly_savings = license_result.get("estimated_monthly_savings", 0)
+                underutilized_count = license_result.get("underutilized_licenses", 0)
+                
+                if monthly_savings > 100:
+                    warning_msg = f"  COST OPPORTUNITY: ${monthly_savings}/month potential savings from {underutilized_count} unused licenses"
+                    warnings.append(warning_msg)
+                    alerts["warning"].append({
+                        "type": "high_cost_savings",
+                        "message": f"${monthly_savings}/month potential savings available",
+                        "severity": "warning", 
+                        "monthly_savings": monthly_savings,
+                        "underutilized_licenses": underutilized_count
+                    })
+                elif underutilized_count > 0:
+                    alerts["info"].append({
+                        "type": "license_optimization",
+                        "message": f"{underutilized_count} underutilized licenses found",
+                        "severity": "info",
+                        "underutilized_licenses": underutilized_count,
+                        "monthly_savings": monthly_savings
+                    })
+                
+                # Inactive User Alerts
+                inactive_percentage = round((inactive_users / total_users * 100), 1) if total_users > 0 else 0
+                if inactive_percentage > 25:
+                    warning_msg = f"👥 WARNING: High inactive user rate ({inactive_percentage}%) may indicate cleanup needed"
+                    warnings.append(warning_msg)
+                    alerts["warning"].append({
+                        "type": "high_inactive_users",
+                        "message": f"{inactive_percentage}% of users are inactive", 
+                        "severity": "warning",
+                        "inactive_percentage": inactive_percentage,
+                        "inactive_count": inactive_users
+                    })
+
+                # Build JSON summary for this tenant
+                tenant_summary = {
+                    "tenant_name": tenant_name,
+                    "tenant_id": tenant_id,
+                    "total_users": total_users,
+                    "active_users": active_users,
+                    "inactive_users": inactive_users,
+                    "inactive_percentage": inactive_percentage,
+                    "mfa_compliance_rate": mfa_compliance,
+                    "mfa_enabled_users": mfa_result.get("mfa_enabled", 0),
+                    "admin_non_compliant": admin_non_compliant,
+                    "estimated_monthly_savings": monthly_savings,
+                    "underutilized_licenses": underutilized_count,
+                    "warnings": warnings,
+                    "alerts": alerts,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                tenant_summaries.append(tenant_summary)
+                
+                # Log individual tenant summary as JSON
+                import json
+                logging.info(f"Report for {tenant_name}:")
+                logging.info(json.dumps(tenant_summary, indent=2))
+                
             except Exception as e:
                 logging.error(f"Unexpected error processing {tenant['name']}: {e}")
                 failed_reports.append({"tenant_name": tenant["name"], "error": str(e)})
 
-        # Summary logging
-        logging.info("    Report generation completed:")
-        logging.info(
-            f"    Successful: {len(completed_reports)}/{total_tenants} tenants"
-        )
-        if failed_reports:
-            logging.warning(
-                f"    Failed: {len(failed_reports)}/{total_tenants} tenants"
-            )
-            for failed in failed_reports:
-                logging.error(
-                    f"    - {failed.get('tenant_name', 'Unknown')}: {failed.get('error', 'Unknown error')}"
-                )
+        # Build comprehensive JSON report
+        comprehensive_report = {
+            "report_summary": {
+                "total_tenants": total_tenants,
+                "successful_tenants": len(tenant_summaries),
+                "failed_tenants": len(failed_reports),
+                "generation_timestamp": datetime.now().isoformat()
+            },
+            "tenant_reports": tenant_summaries,
+            "failed_reports": failed_reports if failed_reports else []
+        }
+        
+        # Log the comprehensive JSON report
+        import json
+        # logging.info("=== COMPREHENSIVE JSON REPORT ===")
+        logging.info(json.dumps(comprehensive_report, indent=2))
+        # logging.info("=== END JSON REPORT ===")
 
-        logging.info("Report generation finished successfully")
+        # Summary logging for backwards compatibility
+        logging.info(f"Report generation completed: {len(tenant_summaries)}/{total_tenants} successful")
+        if failed_reports:
+            logging.warning(f"Failed: {len(failed_reports)}/{total_tenants} tenants")
+            for failed in failed_reports:
+                logging.error(f"- {failed.get('tenant_name', 'Unknown')}: {failed.get('error', 'Unknown error')}")
 
     except Exception as e:
         logging.error(f"Critical error report generation: {str(e)}")

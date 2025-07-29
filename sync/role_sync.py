@@ -70,29 +70,40 @@ def transform_role_data(roles, tenant_id):
                 try:
                     members = future.result()
                     
-                    # Process each member of this role
-                    for member in members:
-                        if member.get('@odata.type') == '#microsoft.graph.user':
-                            user_role_record = {
-                                'tenant_id': tenant_id,
-                                'user_id': member.get('id'),
-                                'role_id': role.get('id'),
-                                'user_principal_name': member.get('userPrincipalName'),
-                                'user_display_name': member.get('displayName'),
-                                'role_display_name': role.get('displayName'),
-                                'role_description': role.get('description'),
-                                'assigned_date': datetime.utcnow().isoformat(),
-                                'is_active': 1,
-                                'synced_at': datetime.utcnow().isoformat()
-                            }
-                            user_role_records.append(user_role_record)
+                    # Count user members for this role
+                    user_members = [m for m in members if m.get('@odata.type') == '#microsoft.graph.user']
+                    member_count = len(user_members)
+                    
+                    # Create role record
+                    role_record = {
+                        'tenant_id': tenant_id,
+                        'role_id': role.get('id'),
+                        'role_display_name': role.get('displayName'),
+                        'role_description': role.get('description'),
+                        'member_count': member_count
+                    }
+                    role_records.append(role_record)
+                    
+                    # Process each user member of this role
+                    for member in user_members:
+                        user_role_record = {
+                            'tenant_id': tenant_id,
+                            'user_id': member.get('id'),
+                            'role_id': role.get('id'),
+                            'user_principal_name': member.get('userPrincipalName'),
+                            'role_display_name': role.get('displayName'),
+                            'role_description': role.get('description'),
+                            'assigned_date': datetime.utcnow().isoformat(),
+                            'synced_at': datetime.utcnow().isoformat()
+                        }
+                        user_role_records.append(user_role_record)
                             
                 except Exception as e:
                     logger.error(f"Failed to process role {role.get('displayName', 'Unknown')}: {str(e)}")
                     continue
 
-        logger.info(f"Transformed {len(user_role_records)} user role assignments for tenant {tenant_id}")
-        return user_role_records
+        logger.info(f"Transformed {len(role_records)} roles and {len(user_role_records)} user role assignments for tenant {tenant_id}")
+        return role_records, user_role_records
 
     except Exception as e:
         logger.error(f"Failed to transform role data for tenant {tenant_id}: {str(e)}")
@@ -112,28 +123,37 @@ def sync_roles(tenant_id):
             return {
                 'status': 'completed',
                 'tenant_id': tenant_id,
+                'roles_synced': 0,
                 'user_roles_synced': 0,
                 'duration_seconds': (datetime.utcnow() - start_time).total_seconds()
             }
 
-        # Transform and get user role assignments
-        user_role_records = transform_role_data(roles, tenant_id)
+        # Transform and get role data
+        role_records, user_role_records = transform_role_data(roles, tenant_id)
         
         # Store in database
+        from core.database import get_connection
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Clear existing records for this tenant first
+        cursor.execute("DELETE FROM roles WHERE tenant_id = ?", (tenant_id,))
+        cursor.execute("DELETE FROM user_roles WHERE tenant_id = ?", (tenant_id,))
+        conn.commit()
+        conn.close()
+        
+        # Insert new role records
+        if role_records:
+            upsert_many('roles', role_records)
+            logger.info(f"Successfully stored {len(role_records)} roles")
+        
+        # Insert new user role assignments
         if user_role_records:
-            # Clear existing records for this tenant first
-            from core.database import get_connection
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM user_roles WHERE tenant_id = ?", (tenant_id,))
-            conn.commit()
-            conn.close()
-            
-            # Insert new records
             upsert_many('user_roles', user_role_records)
             logger.info(f"Successfully stored {len(user_role_records)} user role assignments")
-        else:
-            logger.warning(f"No user role assignments to store for tenant {tenant_id}")
+        
+        if not role_records and not user_role_records:
+            logger.warning(f"No role data to store for tenant {tenant_id}")
 
         duration = (datetime.utcnow() - start_time).total_seconds()
         logger.info(f"Role sync completed for tenant {tenant_id} in {duration:.2f} seconds")
@@ -141,7 +161,8 @@ def sync_roles(tenant_id):
         return {
             'status': 'completed',
             'tenant_id': tenant_id,
-            'user_roles_synced': len(user_role_records),
+            'roles_synced': len(role_records) if role_records else 0,
+            'user_roles_synced': len(user_role_records) if user_role_records else 0,
             'duration_seconds': duration
         }
 
@@ -178,7 +199,7 @@ def sync_roles_for_tenants(tenant_ids):
                     results.append(result)
                     
                     if result['status'] == 'completed':
-                        logger.info(f"  Tenant {tenant_id}: {result['user_roles_synced']} role assignments synced")
+                        logger.info(f"  Tenant {tenant_id}: {result['roles_synced']} roles, {result['user_roles_synced']} role assignments synced")
                     else:
                         logger.error(f"  Tenant {tenant_id}: {result.get('error', 'Unknown error')}")
                         
@@ -196,9 +217,11 @@ def sync_roles_for_tenants(tenant_ids):
         # Summary
         successful = [r for r in results if r['status'] == 'completed']
         failed = [r for r in results if r['status'] == 'error']
+        total_roles = sum(r.get('roles_synced', 0) for r in successful)
         total_role_assignments = sum(r.get('user_roles_synced', 0) for r in successful)
         
         logger.info(f"Role sync summary: {len(successful)} successful, {len(failed)} failed")
+        logger.info(f"Total roles synced: {total_roles}")
         logger.info(f"Total role assignments synced: {total_role_assignments}")
         logger.info(f"Total duration: {duration:.2f} seconds")
         
@@ -207,6 +230,7 @@ def sync_roles_for_tenants(tenant_ids):
             'total_tenants': len(tenant_ids),
             'successful_tenants': len(successful),
             'failed_tenants': len(failed),
+            'total_roles_synced': total_roles,
             'total_role_assignments_synced': total_role_assignments,
             'duration_seconds': duration,
             'results': results

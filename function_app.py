@@ -25,6 +25,8 @@ def users_sync(timer: func.TimerRequest) -> None:
         logging.warning("User sync timer is past due!")
 
     tenants = get_tenants()  # Automatically uses TENANT_MODE environment variable
+    # reverse the list of tenants
+    tenants.reverse()
     for tenant in tenants:
         try:
             # Main data sync
@@ -116,7 +118,7 @@ def role_sync(timer: func.TimerRequest) -> None:
 
     if result["status"] == "completed":
         logging.info(
-            f"  Role sync completed: {result['total_role_assignments_synced']} role assignments across {result['successful_tenants']} tenants"
+            f"  Role sync completed: {result['total_roles_synced']} roles, {result['total_role_assignments_synced']} role assignments across {result['successful_tenants']} tenants"
         )
         if result["failed_tenants"] > 0:
             logging.warning(f"  {result['failed_tenants']} tenants failed role sync")
@@ -192,6 +194,7 @@ def role_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     if result["status"] == "completed":
         successful_tenants = result["successful_tenants"]
         failed_tenants = result["failed_tenants"]
+        total_roles = result["total_roles_synced"]
         total_role_assignments = result["total_role_assignments_synced"]
 
         # Enhanced error reporting for multi-tenant scenarios
@@ -214,7 +217,7 @@ def role_sync_http(req: func.HttpRequest) -> func.HttpResponse:
             if other_errors > 0:
                 logging.warning(f"  - {other_errors} tenants: Other errors")
 
-        response_msg = f"Role sync completed: {total_role_assignments} role assignments synced across {successful_tenants} tenants"
+        response_msg = f"Role sync completed: {total_roles} roles, {total_role_assignments} role assignments synced across {successful_tenants} tenants"
         if failed_tenants > 0:
             response_msg += f" ({failed_tenants} tenants failed)"
 
@@ -395,7 +398,7 @@ def generate_user_report(timer: func.TimerRequest) -> None:
                         COUNT(*) as total_role_assignments,
                         COUNT(DISTINCT role_id) as unique_roles_assigned
                     FROM user_roles 
-                    WHERE tenant_id = ? AND is_active = 1
+                    WHERE tenant_id = ?
                     """,
                     (tenant_id,)
                 )
@@ -406,8 +409,7 @@ def generate_user_report(timer: func.TimerRequest) -> None:
                     SELECT COUNT(DISTINCT ur.user_id) as count
                     FROM user_roles ur
                     INNER JOIN users u ON ur.user_id = u.id AND ur.tenant_id = u.tenant_id
-                    WHERE ur.tenant_id = ? AND ur.is_active = 1 
-                    AND u.account_enabled = 0
+                    WHERE ur.tenant_id = ? AND u.account_enabled = 0
                     """,
                     (tenant_id,)
                 )

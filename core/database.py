@@ -103,6 +103,20 @@ def init_schema():
         """
         )
 
+        # Roles table (role definitions)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS roles (
+                tenant_id TEXT,
+                role_id TEXT,
+                role_display_name TEXT,
+                role_description TEXT,
+                member_count INTEGER DEFAULT 0,
+                PRIMARY KEY (tenant_id, role_id)
+            )
+        """
+        )
+
         # User roles table
         cursor.execute(
             """
@@ -111,11 +125,9 @@ def init_schema():
                 user_id TEXT,
                 role_id TEXT,
                 user_principal_name TEXT,
-                user_display_name TEXT,
                 role_display_name TEXT,
                 role_description TEXT,
                 assigned_date TEXT,
-                is_active INTEGER DEFAULT 1,
                 synced_at TEXT,
                 PRIMARY KEY (tenant_id, user_id, role_id)
             )
@@ -131,6 +143,9 @@ def init_schema():
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_user_licenses_tenant ON user_licenses(tenant_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_roles_tenant ON roles(tenant_id)"
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_user_roles_tenant ON user_roles(tenant_id)"

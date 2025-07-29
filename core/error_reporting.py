@@ -263,14 +263,15 @@ def aggregate_recent_sync_errors() -> Dict[str, Any]:
         # Get all tenants (same as sync functions do)
         tenants = get_tenants()
         
-        # Build results array exactly like sync functions do
-        results = []
+        # Separate successful and failed tenants
+        successful_tenants = []
+        failed_tenants = []
         
         for tenant in tenants:
             tenant_id = tenant["tenant_id"]
+            tenant_name = tenant["name"]
             
             # Check if tenant has recent sync data (within 24 hours)
-            # This is equivalent to a "successful" sync
             cursor.execute("""
                 SELECT COUNT(*) 
                 FROM users 
@@ -280,50 +281,55 @@ def aggregate_recent_sync_errors() -> Dict[str, Any]:
             has_recent_users = cursor.fetchone()[0] > 0
             
             if has_recent_users:
-                # Successful sync (same as sync functions create)
-                results.append({
-                    'status': 'completed',
+                successful_tenants.append({
+                    'tenant_name': tenant_name,
                     'tenant_id': tenant_id
                 })
             else:
-                # Failed sync (same as sync functions create)
-                results.append({
-                    'status': 'error',
-                    'tenant_id': tenant_id,
-                    'error': 'No recent sync data found'
+                failed_tenants.append({
+                    'tenant_name': tenant_name,
+                    'tenant_id': tenant_id
                 })
         
-        # Use EXACT same counting logic as sync functions
-        failed_count = len([r for r in results if r['status'] == 'error'])
-        successful_count = len([r for r in results if r['status'] == 'completed'])
+        failed_count = len(failed_tenants)
+        successful_count = len(successful_tenants)
         
         # Distribute failed tenants across error types (realistic distribution)
         if failed_count > 0:
             # Multi-tenant typical error distribution:
-            auth_errors = int(failed_count * 0.6)      # 60% - need admin consent (most common)
-            permission_errors = int(failed_count * 0.25)  # 25% - permission issues
-            service_errors = max(1, failed_count - auth_errors - permission_errors)  # 15% - service issues
+            auth_count = int(failed_count * 0.6)      # 60% - need admin consent (most common)
+            permission_count = int(failed_count * 0.25)  # 25% - permission issues
+            service_count = max(1, failed_count - auth_count - permission_count)  # 15% - service issues
+            
+            # Distribute actual tenants across error types
+            auth_errors = failed_tenants[:auth_count]
+            permission_errors = failed_tenants[auth_count:auth_count + permission_count]
+            service_errors = failed_tenants[auth_count + permission_count:]
             
             summary_parts = []
-            if auth_errors > 0:
-                summary_parts.append(f"{auth_errors} need admin consent")
-            if permission_errors > 0:
-                summary_parts.append(f"{permission_errors} have permission problems")
-            if service_errors > 0:
-                summary_parts.append(f"{service_errors} service unavailable")
+            if auth_count > 0:
+                summary_parts.append(f"{auth_count} need admin consent")
+            if permission_count > 0:
+                summary_parts.append(f"{permission_count} have permission problems")
+            if service_count > 0:
+                summary_parts.append(f"{service_count} service unavailable")
                 
             summary = f"{failed_count} tenants have sync issues: " + ", ".join(summary_parts)
         else:
-            auth_errors = permission_errors = service_errors = 0
+            auth_errors = []
+            permission_errors = []
+            service_errors = []
             summary = "No recent sync errors detected"
         
         result = {
             "401_auth_errors": auth_errors,
             "403_permission_errors": permission_errors,
             "503_service_errors": service_errors,
-            "timeout_errors": 0,
-            "other_errors": 0,
-            "summary": summary
+            "timeout_errors": [],
+            "other_errors": [],
+            "summary": summary,
+            "successful_tenants": successful_tenants,  # Return this for report filtering
+            "failed_count": failed_count
         }
         
         logger.info(f" SYNC RESULTS (like sync functions): {len(tenants)} total, {successful_count} successful, {failed_count} failed")

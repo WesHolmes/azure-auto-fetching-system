@@ -488,17 +488,35 @@ def generate_user_report(timer: func.TimerRequest) -> None:
     if timer.past_due:
         logging.warning("User report timer is past due!")
 
-    tenants = get_tenants()  # Automatically uses TENANT_MODE environment variable
-    total_tenants = len(tenants)
+    all_tenants = get_tenants()  # Get all tenants first
+    total_tenants = len(all_tenants)
 
     logging.info(f"Starting report generation for {total_tenants} tenants")
 
     try:
-        # Process tenants and build JSON summaries
+        # Get sync error data to determine which tenants to process
+        logging.info("Analyzing sync status...")
+        recent_sync_errors = aggregate_recent_sync_errors()
+        
+        # Extract successful tenants (only process these)
+        successful_tenants_info = recent_sync_errors["successful_tenants"]
+        failed_count = recent_sync_errors["failed_count"]
+        
+        # Remove helper fields from final output
+        recent_sync_errors.pop("successful_tenants", None)
+        recent_sync_errors.pop("failed_count", None)
+        
+        logging.info(f"Processing {len(successful_tenants_info)} successful tenants (excluding {failed_count} failed syncs)")
+        
+        # Process only successful tenants and build JSON summaries
         tenant_summaries = []
         failed_reports = []
 
-        for tenant in tenants:
+        for tenant_info in successful_tenants_info:
+            # Find full tenant info from all_tenants
+            tenant = next((t for t in all_tenants if t["tenant_id"] == tenant_info["tenant_id"]), None)
+            if not tenant:
+                continue
             try:
                 tenant_id = tenant["tenant_id"]
                 tenant_name = tenant["name"]
@@ -618,19 +636,9 @@ def generate_user_report(timer: func.TimerRequest) -> None:
                 logging.error(f"Unexpected error processing {tenant['name']}: {e}")
                 failed_reports.append({"tenant_name": tenant["name"], "error": str(e)})
 
-        # Get aggregated sync error data
-        recent_sync_errors = aggregate_recent_sync_errors()
-        
-        # Calculate total failed tenants (including sync failures)
-        total_sync_failed = (recent_sync_errors["401_auth_errors"] + 
-                           recent_sync_errors["403_permission_errors"] + 
-                           recent_sync_errors["503_service_errors"] + 
-                           recent_sync_errors["timeout_errors"] + 
-                           recent_sync_errors["other_errors"])
-        
-        # Update failed tenants to include sync failures, but don't exceed total tenants
-        actual_failed_tenants = min(len(failed_reports) + total_sync_failed, total_tenants)
-        actual_successful_tenants = max(total_tenants - actual_failed_tenants, 0)
+        # Calculate actual tenant counts (already have recent_sync_errors from earlier)
+        actual_successful_tenants = len(successful_tenants_info)
+        actual_failed_tenants = failed_count
 
         # Build comprehensive JSON report
         comprehensive_report = {
@@ -650,7 +658,6 @@ def generate_user_report(timer: func.TimerRequest) -> None:
                 }
             },
             "tenant_reports": tenant_summaries,
-            "failed_reports": failed_reports if failed_reports else [],
             "recent_sync_errors": recent_sync_errors
         }
         

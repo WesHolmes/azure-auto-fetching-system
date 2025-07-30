@@ -288,7 +288,7 @@ def sync_licenses(tenant_id, tenant_name):
             user_status_query = f"""
                 SELECT id, account_enabled, user_principal_name
                 FROM users 
-                WHERE id IN ({','.join(['?' for _ in users_to_check])})
+                WHERE id IN ({",".join(["?" for _ in users_to_check])})
                 AND tenant_id = ?
             """
             user_statuses = query(user_status_query, users_to_check + [tenant_id])

@@ -130,8 +130,10 @@ def init_schema():
                 assigned_date TEXT,
                 synced_at TEXT,
                 PRIMARY KEY (tenant_id, user_id, role_id)
-                
-                
+            )
+        """
+        )
+
         # Policies table
         cursor.execute(
             """
@@ -173,8 +175,6 @@ def init_schema():
                 synced_at TEXT,
                 PRIMARY KEY (tenant_id, application_id, policy_id)
             )
-          
-          
         """
         )
 
@@ -193,6 +193,8 @@ def init_schema():
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_user_roles_tenant ON user_roles(tenant_id)"
+        )
+        cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_policies_tenant ON policies(tenant_id)"
         )
         cursor.execute(

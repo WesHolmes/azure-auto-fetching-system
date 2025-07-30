@@ -231,9 +231,7 @@ def policies_sync(timer: func.TimerRequest) -> None:
     log_error_summary(error_counts, "Policies sync")
 
 
-# ============================================================================
 # HTTP TRIGGERS (Manual Endpoints)
-# ============================================================================
 
 @app.route(route="sync/users", methods=["POST"])
 def user_sync_http(req: func.HttpRequest) -> func.HttpResponse:
@@ -632,7 +630,6 @@ def service_principal_analytics_http(req: func.HttpRequest) -> func.HttpResponse
     except Exception as e:
         logging.error(f"Service principal analytics HTTP failed: {str(e)}")
         error_result = {"status": "error", "error": str(e)}
-        import json
         return func.HttpResponse(
             json.dumps(error_result, indent=2), 
             status_code=500, 

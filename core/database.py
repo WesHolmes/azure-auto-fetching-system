@@ -130,7 +130,51 @@ def init_schema():
                 assigned_date TEXT,
                 synced_at TEXT,
                 PRIMARY KEY (tenant_id, user_id, role_id)
+                
+                
+        # Policies table
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS policies (
+                id TEXT,
+                tenant_id TEXT,
+                display_name TEXT,
+                state BOOLEAN,
+                created_date TEXT,
+                modified_date TEXT,
+                synced_at TEXT,
+                PRIMARY KEY (id, tenant_id)
             )
+        """
+        )
+
+        # Policy users table
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS policy_users (
+                tenant_id TEXT,
+                user_id TEXT,
+                policy_id TEXT,
+                user_principal_name TEXT,
+                synced_at TEXT,
+                PRIMARY KEY (tenant_id, user_id, policy_id)
+            )
+        """
+        )
+
+        # Policy applications table
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS policy_applications (
+                tenant_id TEXT,
+                application_id TEXT,
+                policy_id TEXT,
+                application_name TEXT,
+                synced_at TEXT,
+                PRIMARY KEY (tenant_id, application_id, policy_id)
+            )
+          
+          
         """
         )
 
@@ -149,6 +193,19 @@ def init_schema():
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_user_roles_tenant ON user_roles(tenant_id)"
+            "CREATE INDEX IF NOT EXISTS idx_policies_tenant ON policies(tenant_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_policy_users_tenant ON policy_users(tenant_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_policy_users_policy ON policy_users(policy_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_policy_applications_tenant ON policy_applications(tenant_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_policy_applications_policy ON policy_applications(policy_id)"
         )
 
         conn.commit()

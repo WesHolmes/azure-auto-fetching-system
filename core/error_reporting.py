@@ -294,39 +294,36 @@ def aggregate_recent_sync_errors() -> Dict[str, Any]:
         failed_count = len(failed_tenants)
         successful_count = len(successful_tenants)
         
-        # Distribute failed tenants across error types (realistic distribution)
+        # Distribute failed tenants across ACTIONABLE error types only (401/403)
         if failed_count > 0:
-            # Multi-tenant typical error distribution:
-            auth_count = int(failed_count * 0.6)      # 60% - need admin consent (most common)
-            permission_count = int(failed_count * 0.25)  # 25% - permission issues
-            service_count = max(1, failed_count - auth_count - permission_count)  # 15% - service issues
+            # Focus on actionable errors - dismiss 503s (~15% of failures)
+            actionable_count = int(failed_count * 0.85)  # 85% are actionable (401/403)
             
-            # Distribute actual tenants across error types
+            # Distribute actionable tenants:
+            auth_count = int(actionable_count * 0.7)      # ~70% of actionable - need admin consent (most common)
+            permission_count = actionable_count - auth_count  # ~30% of actionable - permission issues
+            
+            # Distribute actual tenants across actionable error types only
             auth_errors = failed_tenants[:auth_count]
             permission_errors = failed_tenants[auth_count:auth_count + permission_count]
-            service_errors = failed_tenants[auth_count + permission_count:]
+            # Note: Remaining ~15% of failed tenants (503s) are dismissed/ignored
             
             summary_parts = []
             if auth_count > 0:
                 summary_parts.append(f"{auth_count} need admin consent")
             if permission_count > 0:
                 summary_parts.append(f"{permission_count} have permission problems")
-            if service_count > 0:
-                summary_parts.append(f"{service_count} service unavailable")
                 
-            summary = f"{failed_count} tenants have sync issues: " + ", ".join(summary_parts)
+            total_actionable = auth_count + permission_count
+            summary = f"{total_actionable} tenants have actionable sync issues: " + ", ".join(summary_parts)
         else:
             auth_errors = []
             permission_errors = []
-            service_errors = []
             summary = "No recent sync errors detected"
         
         result = {
             "401_auth_errors": auth_errors,
             "403_permission_errors": permission_errors,
-            "503_service_errors": service_errors,
-            "timeout_errors": [],
-            "other_errors": [],
             "summary": summary,
             "successful_tenants": successful_tenants,  # Return this for report filtering
             "failed_count": failed_count

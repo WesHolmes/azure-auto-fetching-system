@@ -16,4 +16,4 @@ def get_tenants(tenant_mode="single"):
         for c in contracts
         if c.get("customerId")
     ]
-    return data[:10]
+    return data

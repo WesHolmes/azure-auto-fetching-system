@@ -142,5 +142,6 @@ CLAUDE.md
 
 graph_sync.db
 
-.docs/
+docs/
 .claude/
+archive/

@@ -17,6 +17,7 @@ from datetime import datetime
 from core.database import query
 import json
 import re
+from sync.hibp_sync import sync_hibp_breaches
 
 app = func.FunctionApp()
 
@@ -710,6 +711,79 @@ def service_principal_analytics_http(req: func.HttpRequest) -> func.HttpResponse
             status_code=500,
             mimetype="application/json",
         )
+
+
+@app.timer_trigger(
+    schedule="0 0 1 * * FRI",
+    arg_name="myTimer",
+    use_monitor=False,
+    run_on_startup=False,
+)
+def hibp_sync_timer(myTimer: func.TimerRequest) -> None:
+    """Check all users for data breaches weekly"""
+    if myTimer.past_due:
+        logging.warning("HIBP sync timer is past due!")
+
+    tenants = get_tenants()
+
+    # Create single database connection for all tenants
+    from sql.hibp_db import HIBPDB
+
+    db = HIBPDB()
+
+    try:
+        # Process all tenants using list comprehension
+        results = [
+            sync_hibp_breaches(tenant["tenant_id"], tenant["name"], db)
+            for tenant in tenants
+        ]
+
+        # Log results
+        for i, result in enumerate(results):
+            tenant_name = tenants[i]["name"]
+            if result["status"] == "success":
+                logging.info(
+                    f"✓ {tenant_name}: {result['users_checked']} users checked, {result['breaches_found']} breaches found"
+                )
+            else:
+                logging.error(f"✗ {tenant_name}: {result['error']}")
+    finally:
+        db.close()
+
+
+@app.route(route="sync/hibp", methods=["POST"])
+def hibp_sync_http(req: func.HttpRequest) -> func.HttpResponse:
+    """Manual trigger for HIBP breach check for a specific tenant"""
+    try:
+        req_body = req.get_json()
+        tenant_id = (
+            req_body.get("tenant_id") if req_body else req.params.get("tenant_id")
+        )
+
+        # Get tenant info
+        tenants = get_tenants()
+        tenant = next((t for t in tenants if t["tenant_id"] == tenant_id), None)
+
+        if not tenant:
+            return func.HttpResponse(
+                f"Error: Tenant {tenant_id} not found", status_code=400
+            )
+
+        result = sync_hibp_breaches(tenant_id, tenant["name"])
+
+        if result["status"] == "success":
+            return func.HttpResponse(
+                f"HIBP sync completed for {tenant['name']}: {result['users_checked']} users checked, {result['breaches_found']} breaches found",
+                status_code=200,
+            )
+        else:
+            return func.HttpResponse(
+                f"HIBP sync failed: {result['error']}", status_code=500
+            )
+
+    except Exception as e:
+        logging.error(f"Error in HIBP HTTP sync: {str(e)}")
+        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
 
 
 def get_azure_conditional_policies(tenant_id: str) -> list:

@@ -140,9 +140,7 @@ AzuriteConfig
 CLAUDE.md
 
 graph_sync.db
-
-.docs/
-.claude/
-
-# VS Code settings
 .vscode/
+docs/
+.claude/
+archive/

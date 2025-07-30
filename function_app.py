@@ -412,6 +412,82 @@ def policies_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse(f"Synced {total_policies} conditional access policies and {total_policy_users} user assignments", status_code=200)
 
 
+@app.route(route="tenant/users", methods=["GET"])
+def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single tenant USER data only"""
+    # Returns essential user metrics
+      
+    try:
+        # extract & validate tenant id
+        tenant_id = req.params.get('tenant_id')
+        logging.info(f"Users API request for tenant: {tenant_id}")
+        
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"error": "tenant_id parameter is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+        
+        # check if tenant exists   
+        all_tenants = get_tenants()
+        target_tenant = None
+        for tenant in all_tenants:
+            if tenant["tenant_id"] == tenant_id:
+                target_tenant = tenant
+                break
+        
+        if not target_tenant:
+            return func.HttpResponse(
+                json.dumps({"error": f"Tenant '{tenant_id}' not found"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+        
+        # grab user data
+        tenant_name = target_tenant["name"]
+        
+        # basic user counts
+        total_users_result = query("SELECT COUNT(*) as count FROM users WHERE tenant_id = ?", (tenant_id,))
+        active_users_result = query("SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND account_enabled = 1", (tenant_id,))
+        admin_users_result = query("SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND is_admin = 1", (tenant_id,))
+        
+        # grab user analysis results
+        inactive_analysis = calculate_inactive_users(tenant_id)
+        mfa_analysis = calculate_mfa_compliance(tenant_id)
+        
+        # response data
+        response_data = {
+            "tenant_name": tenant_name,
+            "tenant_id": tenant_id,
+            "timestamp": datetime.now().isoformat(),
+            "total_users": total_users_result[0]["count"] if total_users_result else 0,
+            "active_users": active_users_result[0]["count"] if active_users_result else 0,
+            "admin_users": admin_users_result[0]["count"] if admin_users_result else 0,
+            "mfa_compliance_rate": mfa_analysis.get("compliance_rate", 0),
+            "mfa_enabled_users": mfa_analysis.get("mfa_enabled", 0),
+            "admin_non_compliant": mfa_analysis.get("admin_non_compliant", 0),
+            "never_signed_in_count": inactive_analysis.get("never_signed_in_count", 0),
+            "inactive_count_90_days": inactive_analysis.get("inactive_count", 0)
+        }
+        
+        # return the data
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in get_tenant_users API: {str(e)}")
+        return func.HttpResponse(
+            json.dumps({"error": "Internal server error"}),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
+
+
 # REPORT GENERATION
 
 @app.schedule(

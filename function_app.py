@@ -4,6 +4,7 @@ from core.tenant_manager import get_tenants
 from sync.user_sync import sync_users
 from sync.service_principal_sync import sync_service_principals
 from sync.license_sync import sync_licenses
+from sync.policy_sync import sync_conditional_access_policies
 from analysis.user_analysis import (
     calculate_inactive_users,
     calculate_mfa_compliance,
@@ -11,9 +12,29 @@ from analysis.user_analysis import (
 )
 from datetime import datetime
 from core.database import query
+import re
 
 
 app = func.FunctionApp()
+
+
+def extract_error_code(error_message):
+    """Extract HTTP error code from error message"""
+    # Look for patterns like "403 Forbidden", "401 Unauthorized", etc.
+    match = re.search(r'(\d{3})\s+\w+', str(error_message))
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def log_error_summary(error_counts, sync_type):
+    """Log a summary of errors encountered during sync"""
+    if error_counts:
+        logging.info(f"{sync_type} error summary:")
+        for error_code, count in sorted(error_counts.items()):
+            logging.info(f"error {error_code}: {count}")
+    else:
+        logging.info(f"{sync_type} completed with no errors")
 
 
 @app.schedule(
@@ -86,6 +107,8 @@ def applications_sync(timer: func.TimerRequest) -> None:
         logging.warning("Service principal sync timer is past due!")
 
     tenants = get_tenants()  # Automatically uses TENANT_MODE environment variable
+    error_counts = {}
+    
     for tenant in tenants:
         try:
             result = sync_service_principals(tenant["tenant_id"], tenant["name"])
@@ -95,8 +118,53 @@ def applications_sync(timer: func.TimerRequest) -> None:
                 )
             else:
                 logging.error(f"✗ {tenant['name']}: {result['error']}")
+                # Track error codes from the sync result
+                error_code = extract_error_code(result['error'])
+                if error_code:
+                    error_counts[error_code] = error_counts.get(error_code, 0) + 1
         except Exception as e:
             logging.error(f"✗ {tenant['name']}: {str(e)}")
+            # Track error codes from exceptions
+            error_code = extract_error_code(str(e))
+            if error_code:
+                error_counts[error_code] = error_counts.get(error_code, 0) + 1
+    
+    # Log error summary at the end
+    log_error_summary(error_counts, "Applications sync")
+
+
+@app.schedule(
+    schedule="0 15 0 * * *", arg_name="timer", run_on_startup=False, use_monitor=False
+)
+def policies_sync(timer: func.TimerRequest) -> None:
+    if timer.past_due:
+        logging.warning("Conditional access policy sync timer is past due!")
+
+    tenants = get_tenants()  # Automatically uses TENANT_MODE environment variable
+    error_counts = {}
+    
+    for tenant in tenants:
+        try:
+            result = sync_conditional_access_policies(tenant["tenant_id"], tenant["name"])
+            if result["status"] == "success":
+                logging.info(
+                    f"✓ {tenant['name']}: {result['policies_synced']} conditional access policies, {result['policy_users_synced']} user assignments, {result['policy_applications_synced']} application assignments synced"
+                )
+            else:
+                logging.error(f"✗ {tenant['name']}: {result['error']}")
+                # Track error codes from the sync result
+                error_code = extract_error_code(result['error'])
+                if error_code:
+                    error_counts[error_code] = error_counts.get(error_code, 0) + 1
+        except Exception as e:
+            logging.error(f"✗ {tenant['name']}: {str(e)}")
+            # Track error codes from exceptions
+            error_code = extract_error_code(str(e))
+            if error_code:
+                error_counts[error_code] = error_counts.get(error_code, 0) + 1
+    
+    # Log error summary at the end
+    log_error_summary(error_counts, "Policies sync")
 
 
 # HTTP endpoints remain the same
@@ -141,18 +209,64 @@ def license_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 def application_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     tenants = get_tenants()  # Automatically uses TENANT_MODE environment variable
     total = 0
+    error_counts = {}
 
     for tenant in tenants:
         try:
             result = sync_service_principals(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
                 total += result["service_principals_synced"]
+            else:
+                # Track error codes from the sync result
+                error_code = extract_error_code(result['error'])
+                if error_code:
+                    error_counts[error_code] = error_counts.get(error_code, 0) + 1
         except Exception as e:
             logging.error(
                 f"Error syncing service principals for {tenant['name']}: {str(e)}"
             )
+            # Track error codes from exceptions
+            error_code = extract_error_code(str(e))
+            if error_code:
+                error_counts[error_code] = error_counts.get(error_code, 0) + 1
+    
+    # Log error summary
+    log_error_summary(error_counts, "Service principals HTTP sync")
 
     return func.HttpResponse(f"Synced {total} service principals", status_code=200)
+
+
+@app.route(route="sync/policies", methods=["POST"])
+def policies_sync_http(req: func.HttpRequest) -> func.HttpResponse:
+    tenants = get_tenants()  # Automatically uses TENANT_MODE environment variable
+    total_policies = 0
+    total_policy_users = 0
+    error_counts = {}
+
+    for tenant in tenants:
+        try:
+            result = sync_conditional_access_policies(tenant["tenant_id"], tenant["name"])
+            if result["status"] == "success":
+                total_policies += result["policies_synced"]
+                total_policy_users += result["policy_users_synced"]
+            else:
+                # Track error codes from the sync result
+                error_code = extract_error_code(result['error'])
+                if error_code:
+                    error_counts[error_code] = error_counts.get(error_code, 0) + 1
+        except Exception as e:
+            logging.error(
+                f"Error syncing conditional access policies for {tenant['name']}: {str(e)}"
+            )
+            # Track error codes from exceptions
+            error_code = extract_error_code(str(e))
+            if error_code:
+                error_counts[error_code] = error_counts.get(error_code, 0) + 1
+    
+    # Log error summary
+    log_error_summary(error_counts, "Policies HTTP sync")
+
+    return func.HttpResponse(f"Synced {total_policies} conditional access policies and {total_policy_users} user assignments", status_code=200)
 
 
 def process_tenant_report(tenant: dict) -> dict:
@@ -374,9 +488,10 @@ def service_principal_analytics(timer: func.TimerRequest) -> None:
         logging.warning("Service principal analytics timer is past due!")
 
     try:
+        import json
         from analytics.service_principal_analytics import (
             analyze_service_principals,
-            format_analytics_summary,
+            format_analytics_json,
         )
 
         # Determine tenant mode
@@ -388,48 +503,32 @@ def service_principal_analytics(timer: func.TimerRequest) -> None:
             else "multi"
         )
 
-        logging.info(f"Analyzing service principals in {tenant_mode} mode")
+        logging.info(f"Starting service principal analytics in {tenant_mode} mode")
 
         # Perform analytics
         analytics_result = analyze_service_principals(tenant_mode)
 
         if analytics_result["status"] == "success":
-            # Format and log the summary
-            summary = format_analytics_summary(analytics_result)
-            logging.info(summary)
-
-            # Log key metrics
-            data = analytics_result
-            logging.info(f"Analytics completed: {data['total_sps']} SPs analyzed")
-
-            if data["expired_sps"] > 0:
-                logging.warning(
-                    f"Security Alert: {data['expired_sps']} service principals have expired credentials"
-                )
-
-            if data["sps_no_credentials"] > 0:
-                logging.warning(
-                    f"Security Alert: {data['sps_no_credentials']} service principals have no credentials"
-                )
-
-            if data["disabled_sps"] > 0:
-                logging.info(
-                    f"Info: {data['disabled_sps']} service principals are disabled"
-                )
+            # Format and log as clean JSON
+            json_result = format_analytics_json(analytics_result)
+            logging.info(f"Service Principal Analytics Result: {json.dumps(json_result, indent=2)}")
 
         else:
-            logging.error(f"Analytics failed: {analytics_result['error']}")
+            error_result = {"status": "error", "error": analytics_result['error']}
+            logging.error(f"Analytics failed: {json.dumps(error_result)}")
 
     except Exception as e:
-        logging.error(f"Service principal analytics failed: {str(e)}")
+        error_result = {"status": "error", "error": str(e)}
+        logging.error(f"Service principal analytics failed: {json.dumps(error_result)}")
 
 
 @app.route(route="analytics/serviceprincipals", methods=["GET"])
 def service_principal_analytics_http(req: func.HttpRequest) -> func.HttpResponse:
     try:
+        import json
         from analytics.service_principal_analytics import (
             analyze_service_principals,
-            format_analytics_summary,
+            format_analytics_json,
         )
 
         # Determine tenant mode
@@ -444,13 +543,26 @@ def service_principal_analytics_http(req: func.HttpRequest) -> func.HttpResponse
         analytics_result = analyze_service_principals(tenant_mode)
 
         if analytics_result["status"] == "success":
-            summary = format_analytics_summary(analytics_result)
-            return func.HttpResponse(summary, status_code=200, mimetype="text/plain")
-        else:
+            json_result = format_analytics_json(analytics_result)
             return func.HttpResponse(
-                f"Analytics Error: {analytics_result['error']}", status_code=500
+                json.dumps(json_result, indent=2), 
+                status_code=200, 
+                mimetype="application/json"
+            )
+        else:
+            error_result = {"status": "error", "error": analytics_result['error']}
+            return func.HttpResponse(
+                json.dumps(error_result, indent=2), 
+                status_code=500, 
+                mimetype="application/json"
             )
 
     except Exception as e:
         logging.error(f"Service principal analytics HTTP failed: {str(e)}")
-        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+        error_result = {"status": "error", "error": str(e)}
+        import json
+        return func.HttpResponse(
+            json.dumps(error_result, indent=2), 
+            status_code=500, 
+            mimetype="application/json"
+        )

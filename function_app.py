@@ -414,7 +414,7 @@ def policies_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="tenant/users", methods=["GET"])
 def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP GET endpoint for single tenant USER data only"""
+    """HTTP GET endpoint for single tenant user data only"""
     # Returns essential user metrics
       
     try:
@@ -489,7 +489,7 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="tenant/licenses", methods=["GET"])
 def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP GET endpoint for single tenant LICENSE data only"""
+    """HTTP GET endpoint for single tenant license data only"""
     try:
         # extract & validate tenant id
         tenant_id = req.params.get('tenant_id')
@@ -554,6 +554,84 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
         
     except Exception as e:
         logging.error(f"Error in get_tenant_licenses API: {str(e)}")
+        return func.HttpResponse(
+            json.dumps({"error": "Internal server error"}),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
+@app.route(route="tenant/roles", methods=["GET"])
+def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single tenant roles data only"""
+    try:
+        # extract & validate tenant id
+        tenant_id = req.params.get('tenant_id')
+        logging.info(f"Roles API request for tenant: {tenant_id}")
+        
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"error": "tenant_id parameter is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+        
+        # check if tenant exists  
+        all_tenants = get_tenants()
+        target_tenant = None
+        for tenant in all_tenants:
+            if tenant["tenant_id"] == tenant_id:
+                target_tenant = tenant
+                break
+        
+        if not target_tenant:
+            return func.HttpResponse(
+                json.dumps({"error": f"Tenant '{tenant_id}' not found"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+        
+        # grab roles data
+        tenant_name = target_tenant["name"]
+        
+        # basic role counts
+        total_roles_result = query("SELECT COUNT(*) as count FROM roles WHERE tenant_id = ?", (tenant_id,))
+        total_assignments_result = query("SELECT COUNT(*) as count FROM user_roles WHERE tenant_id = ?", (tenant_id,))
+        unique_users_with_roles_result = query("SELECT COUNT(DISTINCT user_id) as count FROM user_roles WHERE tenant_id = ?", (tenant_id,))
+        
+        # admin role analysis
+        admin_roles_result = query("SELECT COUNT(*) as count FROM roles WHERE tenant_id = ? AND (role_display_name LIKE '%Admin%' OR role_display_name LIKE '%Global%')", (tenant_id,))
+        admin_users_result = query("SELECT COUNT(DISTINCT user_id) as count FROM user_roles WHERE tenant_id = ? AND (role_display_name LIKE '%Admin%' OR role_display_name LIKE '%Global%')", (tenant_id,))
+        
+        # inactive users with roles
+        inactive_admins_result = query("""
+            SELECT COUNT(DISTINCT ur.user_id) as count
+            FROM user_roles ur
+            INNER JOIN users u ON ur.user_id = u.id AND ur.tenant_id = u.tenant_id
+            WHERE ur.tenant_id = ? AND u.account_enabled = 0
+        """, (tenant_id,))
+        
+        # response data
+        response_data = {
+            "tenant_name": tenant_name,
+            "tenant_id": tenant_id,
+            "timestamp": datetime.now().isoformat(),
+            "total_roles": total_roles_result[0]["count"] if total_roles_result else 0,
+            "total_role_assignments": total_assignments_result[0]["count"] if total_assignments_result else 0,
+            "users_with_roles": unique_users_with_roles_result[0]["count"] if unique_users_with_roles_result else 0,
+            "admin_roles": admin_roles_result[0]["count"] if admin_roles_result else 0,
+            "admin_users": admin_users_result[0]["count"] if admin_users_result else 0,
+            "inactive_users_with_roles": inactive_admins_result[0]["count"] if inactive_admins_result else 0
+        }
+        
+        # return the data
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in get_tenant_roles API: {str(e)}")
         return func.HttpResponse(
             json.dumps({"error": "Internal server error"}),
             status_code=500,

@@ -414,9 +414,9 @@ def policies_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="tenant/users", methods=["GET"])
 def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP GET endpoint for single tenant user data only"""
-    # Returns essential user metrics
-      
+    """HTTP GET endpoint for single tenant user data"""
+    # Returns structured response with user optimization actions
+    
     try:
         # extract & validate tenant id
         tenant_id = req.params.get('tenant_id')
@@ -424,54 +424,115 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
         
         if not tenant_id:
             return func.HttpResponse(
-                json.dumps({"error": "tenant_id parameter is required"}),
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id parameter is required"
+                }),
                 status_code=400,
                 headers={"Content-Type": "application/json"}
             )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
         
-        # check if tenant exists   
-        all_tenants = get_tenants()
-        target_tenant = None
-        for tenant in all_tenants:
-            if tenant["tenant_id"] == tenant_id:
-                target_tenant = tenant
-                break
-        
-        if not target_tenant:
+        if tenant_id not in tenant_names:
             return func.HttpResponse(
-                json.dumps({"error": f"Tenant '{tenant_id}' not found"}),
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
                 status_code=404,
                 headers={"Content-Type": "application/json"}
             )
-        
+
+        tenant_name = tenant_names[tenant_id]
+        logging.info(f"Processing user data for tenant: {tenant_name}")
+
         # grab user data
-        tenant_name = target_tenant["name"]
-        
         # basic user counts
-        total_users_result = query("SELECT COUNT(*) as count FROM users WHERE tenant_id = ?", (tenant_id,))
-        active_users_result = query("SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND account_enabled = 1", (tenant_id,))
-        admin_users_result = query("SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND is_admin = 1", (tenant_id,))
+        total_users_query = "SELECT COUNT(*) as count FROM users WHERE tenant_id = ?"
+        total_users_result = query(total_users_query, (tenant_id,))
         
-        # grab user analysis results
-        inactive_analysis = calculate_inactive_users(tenant_id)
-        mfa_analysis = calculate_mfa_compliance(tenant_id)
+        active_users_query = "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND account_enabled = 1"
+        active_users_result = query(active_users_query, (tenant_id,))
         
-        # response data
+        # admin users count
+        admin_users_query = "SELECT COUNT(DISTINCT user_id) as count FROM user_roles WHERE tenant_id = ?"
+        admin_users_result = query(admin_users_query, (tenant_id,))
+        
+        # never signed in users
+        never_signed_in_query = "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND last_sign_in IS NULL AND account_enabled = 1"
+        never_signed_in_result = query(never_signed_in_query, (tenant_id,))
+        
+        # grab analysis data
+        mfa_result = calculate_mfa_compliance(tenant_id)
+        inactive_result = calculate_inactive_users(tenant_id)
+
+        # calculate metrics
+        total_users = total_users_result[0]["count"] if total_users_result else 0
+        active_users = active_users_result[0]["count"] if active_users_result else 0
+        inactive_users = total_users - active_users
+        admin_users = admin_users_result[0]["count"] if admin_users_result else 0
+        never_signed_in = never_signed_in_result[0]["count"] if never_signed_in_result else 0
+        
+        # generate user optimization actions
+        actions = []
+        
+        # action 1: never signed in users
+        if never_signed_in > 0:
+            actions.append({
+                "title": "Review Unused Accounts",
+                "description": f"{never_signed_in} users have never signed in - consider deactivating",
+                "action": "review"
+            })
+        
+        # action 2: inactive users
+        if inactive_users > 0:
+            actions.append({
+                "title": "Review Inactive Users",
+                "description": f"{inactive_users} inactive user accounts - verify if still needed",
+                "action": "review"
+            })
+        
+        # action 3: MFA non-compliance
+        non_compliant_users = mfa_result.get('non_compliant', 0)
+        if non_compliant_users > 0:
+            actions.append({
+                "title": "Enable MFA for Users",
+                "description": f"{non_compliant_users} users without MFA enabled - security risk",
+                "action": "secure"
+            })
+        
+        # action 4: admin MFA compliance
+        admin_non_compliant = mfa_result.get('admin_non_compliant', 0)
+        if admin_non_compliant > 0:
+            actions.append({
+                "title": "Secure Admin Accounts",
+                "description": f"{admin_non_compliant} admin users without MFA - critical security risk",
+                "action": "secure"
+            })
+
+        # build response structure
         response_data = {
-            "tenant_name": tenant_name,
-            "tenant_id": tenant_id,
-            "timestamp": datetime.now().isoformat(),
-            "total_users": total_users_result[0]["count"] if total_users_result else 0,
-            "active_users": active_users_result[0]["count"] if active_users_result else 0,
-            "admin_users": admin_users_result[0]["count"] if admin_users_result else 0,
-            "mfa_compliance_rate": mfa_analysis.get("compliance_rate", 0),
-            "mfa_enabled_users": mfa_analysis.get("mfa_enabled", 0),
-            "admin_non_compliant": mfa_analysis.get("admin_non_compliant", 0),
-            "never_signed_in_count": inactive_analysis.get("never_signed_in_count", 0),
-            "inactive_count_90_days": inactive_analysis.get("inactive_count", 0)
+            "success": True,
+            "data": [],  # empty for metadata endpoints
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "timestamp": datetime.now().isoformat(),
+                "total_users": total_users,
+                "active_users": active_users,
+                "inactive_users": inactive_users,
+                "admin_users": admin_users,
+                "never_signed_in_users": never_signed_in,
+                "mfa_compliance_rate": mfa_result.get('compliance_rate', 0),
+                "mfa_enabled_users": mfa_result.get('mfa_enabled', 0),
+                "risk_level": mfa_result.get('risk_level', 'unknown')
+            },
+            "actions": actions[:4]  # limit to maximum 4 actions
         }
         
-        # return the data
         return func.HttpResponse(
             json.dumps(response_data, indent=2),
             status_code=200,
@@ -479,9 +540,13 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
         )
         
     except Exception as e:
-        logging.error(f"Error in get_tenant_users API: {str(e)}")
+        error_msg = f"Error retrieving user data: {str(e)}"
+        logging.error(error_msg)
         return func.HttpResponse(
-            json.dumps({"error": "Internal server error"}),
+            json.dumps({
+                "success": False,
+                "error": error_msg
+            }),
             status_code=500,
             headers={"Content-Type": "application/json"}
         )
@@ -489,7 +554,9 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="tenant/licenses", methods=["GET"])
 def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP GET endpoint for single tenant license data only"""
+    """HTTP GET endpoint for single tenant license data"""
+    # Returns structured response with license optimization actions only
+    
     try:
         # extract & validate tenant id
         tenant_id = req.params.get('tenant_id')
@@ -497,55 +564,114 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
         
         if not tenant_id:
             return func.HttpResponse(
-                json.dumps({"error": "tenant_id parameter is required"}),
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id parameter is required"
+                }),
                 status_code=400,
                 headers={"Content-Type": "application/json"}
             )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
         
-        # check if tenant exists  
-        all_tenants = get_tenants()
-        target_tenant = None
-        for tenant in all_tenants:
-            if tenant["tenant_id"] == tenant_id:
-                target_tenant = tenant
-                break
-        
-        if not target_tenant:
+        if tenant_id not in tenant_names:
             return func.HttpResponse(
-                json.dumps({"error": f"Tenant '{tenant_id}' not found"}),
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
                 status_code=404,
                 headers={"Content-Type": "application/json"}
             )
-        
+
+        tenant_name = tenant_names[tenant_id]
+        logging.info(f"Processing license data for tenant: {tenant_name}")
+
         # grab license data
-        tenant_name = target_tenant["name"]
+        # total license types
+        total_licenses_query = "SELECT COUNT(DISTINCT license_display_name) as count FROM licenses WHERE tenant_id = ?"
+        total_licenses_result = query(total_licenses_query, (tenant_id,))
         
-        # basic license counts
-        total_licenses_result = query("SELECT COUNT(*) as count FROM licenses WHERE tenant_id = ?", (tenant_id,))
-        total_assignments_result = query("SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ?", (tenant_id,))
-        active_assignments_result = query("SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ? AND is_active = 1", (tenant_id,))
+        # total license assignments
+        total_assignments_query = "SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ?"
+        total_assignments_result = query(total_assignments_query, (tenant_id,))
         
-        # license cost calculations
-        total_cost_result = query("SELECT SUM(monthly_cost) as total_cost FROM user_licenses WHERE tenant_id = ? AND is_active = 1", (tenant_id,))
+        # active license assignments
+        active_assignments_query = "SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ? AND is_active = 1"
+        active_assignments_result = query(active_assignments_query, (tenant_id,))
         
-        # license optimization analysis
+        # total monthly cost for active licenses
+        total_cost_query = "SELECT SUM(monthly_cost) as total_cost FROM user_licenses WHERE tenant_id = ? AND is_active = 1"
+        total_cost_result = query(total_cost_query, (tenant_id,))
+        
+        # grab license optimization data
         license_optimization = calculate_license_optimization(tenant_id)
+
+        # calculate metrics
+        total_license_types = total_licenses_result[0]["count"] if total_licenses_result else 0
+        total_assignments = total_assignments_result[0]["count"] if total_assignments_result else 0
+        active_assignments = active_assignments_result[0]["count"] if active_assignments_result else 0
+        inactive_assignments = total_assignments - active_assignments
+        monthly_cost = round(total_cost_result[0]["total_cost"] or 0, 2) if total_cost_result else 0
+        utilization_rate = license_optimization.get("utilization_rate", 0)
+        monthly_savings = license_optimization.get("estimated_monthly_savings", 0)
+
+        # generate license-specific optimization actions
+        actions = []
         
-        # response data
+        # action 1: inactive license assignments (license-focused)
+        if inactive_assignments > 0:
+            actions.append({
+                "title": "Remove Inactive License Assignments",
+                "description": f"{inactive_assignments} inactive license assignments wasting budget",
+                "action": "cleanup"
+            })
+
+        # action 2: low utilization licenses
+        if utilization_rate < 70:
+            actions.append({
+                "title": "Investigate Low License Utilization", 
+                "description": f"Only {utilization_rate}% license utilization - review assignments",
+                "action": "optimize"
+            })
+
+        # action 3: high cost savings opportunity  
+        if monthly_savings > 100:
+            actions.append({
+                "title": "Realize License Cost Savings",
+                "description": f"${monthly_savings}/month potential savings from license optimization",
+                "action": "optimize"
+            })
+
+        # action 4: license portfolio consolidation (only for smaller deployments)
+        if total_license_types > 5 and total_assignments < 50:
+            actions.append({
+                "title": "Consolidate License Types",
+                "description": f"{total_license_types} license types for small user base - consider consolidation",
+                "action": "optimize"
+            })
+
+        # build response structure
         response_data = {
-            "tenant_name": tenant_name,
-            "tenant_id": tenant_id,
-            "timestamp": datetime.now().isoformat(),
-            "total_license_types": total_licenses_result[0]["count"] if total_licenses_result else 0,
-            "total_license_assignments": total_assignments_result[0]["count"] if total_assignments_result else 0,
-            "active_license_assignments": active_assignments_result[0]["count"] if active_assignments_result else 0,
-            "monthly_license_cost": round(total_cost_result[0]["total_cost"] or 0, 2),
-            "license_utilization_rate": license_optimization.get("utilization_rate", 0),
-            "underutilized_licenses": license_optimization.get("underutilized_licenses", 0),
-            "estimated_monthly_savings": license_optimization.get("estimated_monthly_savings", 0)
+            "success": True,
+            "data": [],  # empty for metadata endpoints
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "timestamp": datetime.now().isoformat(),
+                "total_license_types": total_license_types,
+                "total_license_assignments": total_assignments,
+                "active_license_assignments": active_assignments,
+                "monthly_license_cost": monthly_cost,
+                "license_utilization_rate": utilization_rate,
+                "underutilized_licenses": license_optimization.get("underutilized_licenses", 0),
+                "estimated_monthly_savings": monthly_savings
+            },
+            "actions": actions[:4]  # limit to maximum 4 actions
         }
         
-        # return the data
         return func.HttpResponse(
             json.dumps(response_data, indent=2),
             status_code=200,
@@ -553,16 +679,23 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
         )
         
     except Exception as e:
-        logging.error(f"Error in get_tenant_licenses API: {str(e)}")
+        error_msg = f"Error retrieving license data: {str(e)}"
+        logging.error(error_msg)
         return func.HttpResponse(
-            json.dumps({"error": "Internal server error"}),
+            json.dumps({
+                "success": False,
+                "error": error_msg
+            }),
             status_code=500,
             headers={"Content-Type": "application/json"}
         )
 
+
 @app.route(route="tenant/roles", methods=["GET"])
 def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP GET endpoint for single tenant roles data only"""
+    """HTTP GET endpoint for single tenant roles data"""
+    # Returns structured response with role optimization actions only
+    
     try:
         # extract & validate tenant id
         tenant_id = req.params.get('tenant_id')
@@ -570,60 +703,106 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
         
         if not tenant_id:
             return func.HttpResponse(
-                json.dumps({"error": "tenant_id parameter is required"}),
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id parameter is required"
+                }),
                 status_code=400,
                 headers={"Content-Type": "application/json"}
             )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
         
-        # check if tenant exists  
-        all_tenants = get_tenants()
-        target_tenant = None
-        for tenant in all_tenants:
-            if tenant["tenant_id"] == tenant_id:
-                target_tenant = tenant
-                break
-        
-        if not target_tenant:
+        if tenant_id not in tenant_names:
             return func.HttpResponse(
-                json.dumps({"error": f"Tenant '{tenant_id}' not found"}),
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
                 status_code=404,
                 headers={"Content-Type": "application/json"}
             )
-        
+
+        tenant_name = tenant_names[tenant_id]
+        logging.info(f"Processing roles data for tenant: {tenant_name}")
+
         # grab roles data
-        tenant_name = target_tenant["name"]
+        # total unique roles
+        total_roles_query = "SELECT COUNT(DISTINCT role_id) as count FROM roles WHERE tenant_id = ?"
+        total_roles_result = query(total_roles_query, (tenant_id,))
         
-        # basic role counts
-        total_roles_result = query("SELECT COUNT(*) as count FROM roles WHERE tenant_id = ?", (tenant_id,))
-        total_assignments_result = query("SELECT COUNT(*) as count FROM user_roles WHERE tenant_id = ?", (tenant_id,))
-        unique_users_with_roles_result = query("SELECT COUNT(DISTINCT user_id) as count FROM user_roles WHERE tenant_id = ?", (tenant_id,))
+        # total role assignments
+        total_assignments_query = "SELECT COUNT(*) as count FROM user_roles WHERE tenant_id = ?"
+        total_assignments_result = query(total_assignments_query, (tenant_id,))
         
-        # admin role analysis
-        admin_roles_result = query("SELECT COUNT(*) as count FROM roles WHERE tenant_id = ? AND (role_display_name LIKE '%Admin%' OR role_display_name LIKE '%Global%')", (tenant_id,))
-        admin_users_result = query("SELECT COUNT(DISTINCT user_id) as count FROM user_roles WHERE tenant_id = ? AND (role_display_name LIKE '%Admin%' OR role_display_name LIKE '%Global%')", (tenant_id,))
+        # unique users with role assignments
+        users_with_roles_query = "SELECT COUNT(DISTINCT user_id) as count FROM user_roles WHERE tenant_id = ?"
+        users_with_roles_result = query(users_with_roles_query, (tenant_id,))
         
-        # inactive users with roles
-        inactive_admins_result = query("""
-            SELECT COUNT(DISTINCT ur.user_id) as count
-            FROM user_roles ur
-            INNER JOIN users u ON ur.user_id = u.id AND ur.tenant_id = u.tenant_id
-            WHERE ur.tenant_id = ? AND u.account_enabled = 0
-        """, (tenant_id,))
+        # Admin roles (roles containing 'Admin' or 'Administrator')
+        admin_roles_query = "SELECT COUNT(DISTINCT role_id) as count FROM roles WHERE tenant_id = ? AND (role_display_name LIKE '%Admin%' OR role_display_name LIKE '%Administrator%')"
+        admin_roles_result = query(admin_roles_query, (tenant_id,))
         
-        # response data
+        # Users with multiple roles (potential over-privileged)
+        multi_role_users_query = "SELECT COUNT(*) as count FROM (SELECT user_id FROM user_roles WHERE tenant_id = ? GROUP BY user_id HAVING COUNT(role_id) > 1)"
+        multi_role_users_result = query(multi_role_users_query, (tenant_id,))
+
+        # calculate metrics
+        total_roles = total_roles_result[0]["count"] if total_roles_result else 0
+        total_assignments = total_assignments_result[0]["count"] if total_assignments_result else 0
+        users_with_roles = users_with_roles_result[0]["count"] if users_with_roles_result else 0
+        admin_roles = admin_roles_result[0]["count"] if admin_roles_result else 0
+        multi_role_users = multi_role_users_result[0]["count"] if multi_role_users_result else 0
+        
+        avg_roles_per_user = round(total_assignments / users_with_roles, 1) if users_with_roles > 0 else 0
+
+        # generate role-specific optimization actions
+        actions = []
+        
+        # action 1: review over-privileged users
+        if multi_role_users > 0:
+            actions.append({
+                "title": "Review Over-Privileged Users",
+                "description": f"{multi_role_users} users have multiple roles - verify necessity",
+                "action": "review"
+            })
+
+        # action 2: admin role assignments audit
+        if admin_roles > 0 and users_with_roles > 0:
+            actions.append({
+                "title": "Audit Admin Role Assignments",
+                "description": f"{admin_roles} admin roles assigned - ensure principle of least privilege",
+                "action": "audit"
+            })
+
+        # action 3: role proliferation (optional, only if many roles)
+        if total_roles > 10 and users_with_roles < 20:
+            actions.append({
+                "title": "Consolidate Role Definitions",
+                "description": f"{total_roles} roles for {users_with_roles} users - consider role consolidation",
+                "action": "optimize"
+            })
+
+        # build response structure
         response_data = {
-            "tenant_name": tenant_name,
-            "tenant_id": tenant_id,
-            "timestamp": datetime.now().isoformat(),
-            "total_roles": total_roles_result[0]["count"] if total_roles_result else 0,
-            "total_role_assignments": total_assignments_result[0]["count"] if total_assignments_result else 0,
-            "users_with_roles": unique_users_with_roles_result[0]["count"] if unique_users_with_roles_result else 0,
-            "admin_roles": admin_roles_result[0]["count"] if admin_roles_result else 0,
-            "admin_users": admin_users_result[0]["count"] if admin_users_result else 0,
-            "inactive_users_with_roles": inactive_admins_result[0]["count"] if inactive_admins_result else 0
+            "success": True,
+            "data": [],  # empty for metadata endpoints
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "timestamp": datetime.now().isoformat(),
+                "total_roles": total_roles,
+                "total_role_assignments": total_assignments,
+                "users_with_roles": users_with_roles,
+                "admin_roles": admin_roles,
+                "multi_role_users": multi_role_users,
+                "avg_roles_per_user": avg_roles_per_user
+            },
+            "actions": actions[:3]  # limit to maximum 3 actions (roles tend to have fewer optimization opportunities)
         }
         
-        # return the data
         return func.HttpResponse(
             json.dumps(response_data, indent=2),
             status_code=200,
@@ -631,9 +810,13 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
         )
         
     except Exception as e:
-        logging.error(f"Error in get_tenant_roles API: {str(e)}")
+        error_msg = f"Error retrieving roles data: {str(e)}"
+        logging.error(error_msg)
         return func.HttpResponse(
-            json.dumps({"error": "Internal server error"}),
+            json.dumps({
+                "success": False,
+                "error": error_msg
+            }),
             status_code=500,
             headers={"Content-Type": "application/json"}
         )

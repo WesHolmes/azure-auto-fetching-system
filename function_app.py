@@ -487,6 +487,79 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
         )
 
 
+@app.route(route="tenant/licenses", methods=["GET"])
+def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single tenant LICENSE data only"""
+    try:
+        # extract & validate tenant id
+        tenant_id = req.params.get('tenant_id')
+        logging.info(f"Licenses API request for tenant: {tenant_id}")
+        
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"error": "tenant_id parameter is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+        
+        # check if tenant exists  
+        all_tenants = get_tenants()
+        target_tenant = None
+        for tenant in all_tenants:
+            if tenant["tenant_id"] == tenant_id:
+                target_tenant = tenant
+                break
+        
+        if not target_tenant:
+            return func.HttpResponse(
+                json.dumps({"error": f"Tenant '{tenant_id}' not found"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+        
+        # grab license data
+        tenant_name = target_tenant["name"]
+        
+        # basic license counts
+        total_licenses_result = query("SELECT COUNT(*) as count FROM licenses WHERE tenant_id = ?", (tenant_id,))
+        total_assignments_result = query("SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ?", (tenant_id,))
+        active_assignments_result = query("SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ? AND is_active = 1", (tenant_id,))
+        
+        # license cost calculations
+        total_cost_result = query("SELECT SUM(monthly_cost) as total_cost FROM user_licenses WHERE tenant_id = ? AND is_active = 1", (tenant_id,))
+        
+        # license optimization analysis
+        license_optimization = calculate_license_optimization(tenant_id)
+        
+        # response data
+        response_data = {
+            "tenant_name": tenant_name,
+            "tenant_id": tenant_id,
+            "timestamp": datetime.now().isoformat(),
+            "total_license_types": total_licenses_result[0]["count"] if total_licenses_result else 0,
+            "total_license_assignments": total_assignments_result[0]["count"] if total_assignments_result else 0,
+            "active_license_assignments": active_assignments_result[0]["count"] if active_assignments_result else 0,
+            "monthly_license_cost": round(total_cost_result[0]["total_cost"] or 0, 2),
+            "license_utilization_rate": license_optimization.get("utilization_rate", 0),
+            "underutilized_licenses": license_optimization.get("underutilized_licenses", 0),
+            "estimated_monthly_savings": license_optimization.get("estimated_monthly_savings", 0)
+        }
+        
+        # return the data
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in get_tenant_licenses API: {str(e)}")
+        return func.HttpResponse(
+            json.dumps({"error": "Internal server error"}),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
 
 # REPORT GENERATION
 

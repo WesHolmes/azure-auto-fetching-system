@@ -1,5 +1,6 @@
 import logging
 import azure.functions as func
+from core.graph_client import GraphClient
 from core.tenant_manager import get_tenants
 from sync.user_sync import sync_users
 from sync.service_principal_sync import sync_service_principals
@@ -816,6 +817,220 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
             json.dumps({
                 "success": False,
                 "error": error_msg
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
+
+
+@app.route(route="tenant/users/disable", methods=["PATCH"])
+def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP PATCH endpoint to disable a single inactive user account"""
+    # single tenant, single resource operation
+
+    try:
+        # extract and validate request data
+        logging.info("Processing user disable request")
+        
+        req_body = req.get_json()
+        if not req_body:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "Request body is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # get tenant_id and user identifier from request
+        tenant_id = req_body.get('tenant_id')
+        user_id = req_body.get('user_id')
+        user_principal_name = req_body.get('user_principal_name')
+        
+        # validate required parameters
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+        
+        if not user_id and not user_principal_name:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "Either user_id or user_principal_name is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        logging.info(f"Disabling user for tenant: {tenant_name}")
+
+        # find and validate user exists in database
+        if user_id:
+            # query by user_id
+            user_query = "SELECT * FROM users WHERE tenant_id = ? AND id = ?"
+            user_result = query(user_query, (tenant_id, user_id))
+            identifier = f"user_id: {user_id}"
+        else:
+            # query by user_principal_name
+            user_query = "SELECT * FROM users WHERE tenant_id = ? AND user_principal_name = ?"
+            user_result = query(user_query, (tenant_id, user_principal_name))
+            identifier = f"user_principal_name: {user_principal_name}"
+        
+        if not user_result:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"User not found ({identifier})"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        user = user_result[0]
+        logging.info(f"Found user: {user['user_principal_name']}")
+
+        # check if user is already disabled
+        if not user.get('account_enabled', True):
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"User {user['user_principal_name']} is already disabled",
+                    "data": {
+                        "user_id": user['id'],
+                        "user_principal_name": user['user_principal_name'],
+                        "account_enabled": False
+                    }
+                }),
+                status_code=409,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if user is actually inactive (business rule validation)
+        from datetime import datetime, timedelta
+        
+        last_sign_in = user.get('last_sign_in')
+        inactivity_threshold_days = 90
+        
+        if last_sign_in:
+            try:
+                # parse last sign-in date
+                last_sign_in_date = datetime.fromisoformat(last_sign_in.replace('Z', '+00:00'))
+                days_since_last_signin = (datetime.now() - last_sign_in_date.replace(tzinfo=None)).days
+                
+                if days_since_last_signin < inactivity_threshold_days:
+                    return func.HttpResponse(
+                        json.dumps({
+                            "success": False,
+                            "error": f"User {user['user_principal_name']} is not inactive (last sign-in: {days_since_last_signin} days ago, threshold: {inactivity_threshold_days} days)",
+                            "data": {
+                                "user_id": user['id'],
+                                "user_principal_name": user['user_principal_name'],
+                                "last_sign_in": last_sign_in,
+                                "days_since_last_signin": days_since_last_signin,
+                                "inactivity_threshold_days": inactivity_threshold_days
+                            }
+                        }),
+                        status_code=422,
+                        headers={"Content-Type": "application/json"}
+                    )
+            except Exception as date_parse_error:
+                logging.warning(f"Could not parse last_sign_in date: {last_sign_in}, proceeding with disable")
+
+        # disable user account via graph api
+        logging.info(f"Disabling user {user['user_principal_name']} via Graph API")
+        graph_client = GraphClient(tenant_id)
+        
+        # call Microsoft Graph to disable the user
+        disable_result = graph_client.disable_user(user['id'])
+        
+        if disable_result.get('status') != 'success':
+            error_msg = disable_result.get('error', 'Unknown error disabling user')
+            logging.error(f"Failed to disable user via Graph API: {error_msg}")
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to disable user: {error_msg}",
+                    "data": {
+                        "user_id": user['id'],
+                        "user_principal_name": user['user_principal_name'],
+                        "graph_api_error": error_msg
+                    }
+                }),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # update local database to reflect disabled status
+        current_time = datetime.now().isoformat()
+        update_query = "UPDATE users SET account_enabled = 0, last_update = ? WHERE tenant_id = ? AND id = ?"
+        
+        try:
+            query(update_query, (current_time, tenant_id, user['id']))
+            logging.info(f"Updated local database for user {user['user_principal_name']}")
+        except Exception as db_error:
+            logging.error(f"Failed to update local database: {str(db_error)}")
+            # note: user is disabled in Graph but local DB might be out of sync
+
+        # return success response
+        response_data = {
+            "success": True,
+            "message": f"User {user['user_principal_name']} successfully disabled",
+            "data": {
+                "user_id": user['id'],
+                "user_principal_name": user['user_principal_name'],
+                "display_name": user.get('display_name'),
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "disabled_at": current_time,
+                "was_inactive_since": last_sign_in,
+                "days_inactive": (datetime.now() - datetime.fromisoformat(last_sign_in.replace('Z', '+00:00')).replace(tzinfo=None)).days if last_sign_in else "Never signed in"
+            }
+        }
+        
+        logging.info(f"Successfully disabled user {user['user_principal_name']}")
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        # comprehensive error handling and logging
+        error_msg = f"Error disabling user: {str(e)}"
+        logging.error(error_msg)
+        
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg,
+                "data": {
+                    "tenant_id": req_body.get('tenant_id') if 'req_body' in locals() else None,
+                    "user_id": req_body.get('user_id') if 'req_body' in locals() else None,
+                    "user_principal_name": req_body.get('user_principal_name') if 'req_body' in locals() else None
+                }
             }),
             status_code=500,
             headers={"Content-Type": "application/json"}

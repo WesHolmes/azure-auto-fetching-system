@@ -138,9 +138,10 @@ AzuriteConfig
 
 .DS_Store
 CLAUDE.md
+.vscode/
+reports/
 
 graph_sync.db
-.vscode/
 docs/
 .claude/
 archive/

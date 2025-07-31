@@ -2,6 +2,7 @@
 """
 Environment configuration helper for loading local.settings.json
 """
+
 import os
 import json
 import logging
@@ -23,7 +24,9 @@ def load_local_settings():
                 for key, value in values.items():
                     os.environ[key] = str(value)
 
-                logger.info(f"✅ Loaded {len(values)} settings from local.settings.json")
+                logger.info(
+                    f"✅ Loaded {len(values)} settings from local.settings.json"
+                )
                 return True
 
         except Exception as e:

@@ -17,7 +17,7 @@ from datetime import datetime
 from core.database import query
 import json
 import re
-from sync.hibp_sync import sync_hibp_breaches
+# from sync.hibp_sync import sync_hibp_breaches
 
 app = func.FunctionApp()
 
@@ -705,88 +705,678 @@ def service_principal_analytics_http(req: func.HttpRequest) -> func.HttpResponse
         logging.error(f"Service principal analytics HTTP failed: {str(e)}")
         error_result = {"status": "error", "error": str(e)}
         import json
+        return func.HttpResponse(
+            json.dumps(error_result, indent=2), 
+            status_code=500, 
+            mimetype="application/json"
+        )
 
+
+# @app.timer_trigger(
+#     schedule="0 0 1 * * FRI",
+#     arg_name="myTimer",
+#     use_monitor=False,
+#     run_on_startup=False,
+# )
+# def hibp_sync_timer(myTimer: func.TimerRequest) -> None:
+#     """Check all users for data breaches weekly"""
+#     if myTimer.past_due:
+#         logging.warning("HIBP sync timer is past due!")
+
+#     tenants = get_tenants()
+
+#     # Create single database connection for all tenants
+#     from sql.hibp_db import HIBPDB
+
+#     db = HIBPDB()
+
+#     try:
+#         # Process all tenants using list comprehension
+#         results = [
+#             sync_hibp_breaches(tenant["tenant_id"], tenant["name"], db)
+#             for tenant in tenants
+#         ]
+
+#         # Log results
+#         for i, result in enumerate(results):
+#             tenant_name = tenants[i]["name"]
+#             if result["status"] == "success":
+#                 logging.info(
+#                     f"✓ {tenant_name}: {result['users_checked']} users checked, {result['breaches_found']} breaches found"
+#                 )
+#             else:
+#                 logging.error(f"✗ {tenant_name}: {result['error']}")
+#     finally:
+#         db.close()
+
+
+# @app.route(route="sync/hibp", methods=["POST"])
+# def hibp_sync_http(req: func.HttpRequest) -> func.HttpResponse:
+#     """Manual trigger for HIBP breach check for a specific tenant"""
+#     try:
+#         req_body = req.get_json()
+#         tenant_id = (
+#             req_body.get("tenant_id") if req_body else req.params.get("tenant_id")
+#         )
+
+#         # Get tenant info
+#         tenants = get_tenants()
+#         tenant = next((t for t in tenants if t["tenant_id"] == tenant_id), None)
+
+#         if not tenant:
+#             return func.HttpResponse(
+#                 f"Error: Tenant {tenant_id} not found", status_code=400
+#             )
+
+#         result = sync_hibp_breaches(tenant_id, tenant["name"])
+
+#         if result["status"] == "success":
+#             return func.HttpResponse(
+#                 f"HIBP sync completed for {tenant['name']}: {result['users_checked']} users checked, {result['breaches_found']} breaches found",
+#                 status_code=200,
+#             )
+#         else:
+#             return func.HttpResponse(
+#                 f"HIBP sync failed: {result['error']}", status_code=500
+#             )
+
+#     except Exception as e:
+#         logging.error(f"Error in HIBP HTTP sync: {str(e)}")
+#         return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+
+# def get_azure_conditional_policies(tenant_id: str) -> list:
+#     graph = GraphClient(tenant_id)
+#     return graph.get("/policies/conditionalAccess/policies")
+
+
+
+@app.route(route="tenant/serviceprincipals", methods=["GET", "POST"])
+def get_all_sps(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Get all service principals for a specific tenant from database
+    GET /api/tenant/serviceprincipals?tenant_id={tenant_id}
+    POST /api/tenant/serviceprincipals with JSON body: {"tenant_id": "..."}
+    """
+    try:
+        logging.info(f"get_all_sps endpoint called via {req.method}")
+        
+        # Extract tenant_id from query parameters (GET) or request body (POST)
+        tenant_id = None
+        
+        if req.method == "GET":
+            tenant_id = req.params.get('tenant_id')
+            logging.info(f"GET request with tenant_id parameter: {tenant_id}")
+        elif req.method == "POST":
+            try:
+                req_body = req.get_json()
+                if req_body:
+                    tenant_id = req_body.get('tenant_id')
+                    logging.info(f"POST request with tenant_id in body: {tenant_id}")
+                else:
+                    # Try query parameter as fallback for POST
+                    tenant_id = req.params.get('tenant_id')
+                    logging.info(f"POST request with tenant_id parameter: {tenant_id}")
+            except ValueError:
+                # If JSON parsing fails, try query parameter
+                tenant_id = req.params.get('tenant_id')
+                logging.info(f"POST request with tenant_id parameter (JSON parse failed): {tenant_id}")
+        
+        if not tenant_id:
+            error_response = {
+                "success": False,
+                "data": [],
+                "metadata": {},
+                "actions": [],
+                "error": "Missing required parameter: tenant_id",
+                "usage": {
+                    "GET": "/api/tenant/serviceprincipals?tenant_id={tenant_id}",
+                    "POST": "/api/tenant/serviceprincipals with JSON body: {\"tenant_id\": \"...\"}"
+                }
+            }
+            logging.error("get_all_sps called without tenant_id parameter")
+            return func.HttpResponse(
+                json.dumps(error_response, indent=2),
+                status_code=400,
+                mimetype="application/json"
+            )
+        
+        # Get all configured tenants to validate and get tenant name
+        logging.info("Retrieving configured tenants...")
+        tenants = get_tenants()
+        logging.info(f"Found {len(tenants)} configured tenant(s)")
+        
+        # Validate tenant_id against configured tenants
+        target_tenant = None
+        for tenant in tenants:
+            if tenant["tenant_id"] == tenant_id:
+                target_tenant = tenant
+                break
+        
+        if not target_tenant:
+            available_tenants = [{"name": t["name"], "tenant_id": t["tenant_id"]} for t in tenants]
+            error_response = {
+                "success": False,
+                "data": [],
+                "metadata": {},
+                "actions": [],
+                "error": f"Invalid tenant_id: {tenant_id}. Tenant not found in configured tenants.",
+                "provided_tenant_id": tenant_id,
+                "available_tenants": available_tenants
+            }
+            logging.error(f"get_all_sps called with invalid tenant_id: {tenant_id}")
+            return func.HttpResponse(
+                json.dumps(error_response, indent=2),
+                status_code=404,
+                mimetype="application/json"
+            )
+        
+        # Query service principals from database
+        logging.info(f"Querying service principals for tenant '{target_tenant['name']}' ({tenant_id})")
+        
+        service_principals_query = """
+        SELECT 
+            id,
+            tenant_id,
+            app_id,
+            display_name,
+            publisher_name,
+            service_principal_type,
+            owners,
+            credential_exp_date,
+            credential_type,
+            enabled_sp,
+            last_sign_in,
+            synced_at
+        FROM service_principals 
+        WHERE tenant_id = ?
+        ORDER BY display_name ASC
+        """
+        
+        service_principals = query(service_principals_query, (tenant_id,))
+        
+        # Get count statistics for metadata
+        total_count = len(service_principals)
+        enabled_count = len([sp for sp in service_principals if sp.get('enabled_sp')])
+        disabled_count = total_count - enabled_count
+        
+        # Count by type
+        type_counts = {}
+        for sp in service_principals:
+            sp_type = sp.get('service_principal_type', 'Unknown')
+            type_counts[sp_type] = type_counts.get(sp_type, 0) + 1
+        
+        # Build response following REST API guidance format
+        response = {
+            "success": True,
+            "data": service_principals,
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": target_tenant['name'],
+                "total_service_principals": total_count,
+                "enabled_count": enabled_count,
+                "disabled_count": disabled_count,
+                "service_principal_types": type_counts,
+                "last_queried": datetime.now().isoformat(),
+                "endpoint": "get_all_sps",
+                "request_method": req.method
+            },
+            "actions": []
+        }
+        
+        logging.info(f"✓ get_all_sps completed for {target_tenant['name']}: returned {total_count} service principals")
+        return func.HttpResponse(
+            json.dumps(response, indent=2),
+            status_code=200,
+            mimetype="application/json"
+        )
+            
+    except Exception as e:
+        error_msg = f"Unexpected error during get_all_sps: {str(e)}"
+        logging.error(error_msg)
+        logging.exception("Full exception details:")
+        
+        error_result = {
+            "success": False,
+            "data": [],
+            "metadata": {},
+            "actions": [],
+            "error": error_msg,
+            "endpoint": "get_all_sps",
+            "timestamp": datetime.now().isoformat()
+        }
         return func.HttpResponse(
             json.dumps(error_result, indent=2),
             status_code=500,
-            mimetype="application/json",
+            mimetype="application/json"
         )
 
 
-@app.timer_trigger(
-    schedule="0 0 1 * * FRI",
-    arg_name="myTimer",
-    use_monitor=False,
-    run_on_startup=False,
-)
-def hibp_sync_timer(myTimer: func.TimerRequest) -> None:
-    """Check all users for data breaches weekly"""
-    if myTimer.past_due:
-        logging.warning("HIBP sync timer is past due!")
-
-    tenants = get_tenants()
-
-    # Create single database connection for all tenants
-    from sql.hibp_db import HIBPDB
-
-    db = HIBPDB()
-
+@app.route(route="tenant/analysis", methods=["GET", "POST"])
+def get_sps_report(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Analyze service principals for a specific tenant and provide actionable insights
+    GET /api/tenant/analysis?tenant_id={tenant_id}
+    POST /api/tenant/analysis with JSON body: {"tenant_id": "..."}
+    """
     try:
-        # Process all tenants using list comprehension
-        results = [
-            sync_hibp_breaches(tenant["tenant_id"], tenant["name"], db)
-            for tenant in tenants
-        ]
-
-        # Log results
-        for i, result in enumerate(results):
-            tenant_name = tenants[i]["name"]
-            if result["status"] == "success":
-                logging.info(
-                    f"✓ {tenant_name}: {result['users_checked']} users checked, {result['breaches_found']} breaches found"
-                )
-            else:
-                logging.error(f"✗ {tenant_name}: {result['error']}")
-    finally:
-        db.close()
-
-
-@app.route(route="sync/hibp", methods=["POST"])
-def hibp_sync_http(req: func.HttpRequest) -> func.HttpResponse:
-    """Manual trigger for HIBP breach check for a specific tenant"""
-    try:
-        req_body = req.get_json()
-        tenant_id = (
-            req_body.get("tenant_id") if req_body else req.params.get("tenant_id")
-        )
-
-        # Get tenant info
+        logging.info(f"get_sps_report endpoint called via {req.method}")
+        
+        # Extract tenant_id from query parameters (GET) or request body (POST)
+        tenant_id = None
+        
+        if req.method == "GET":
+            tenant_id = req.params.get('tenant_id')
+            logging.info(f"GET request with tenant_id parameter: {tenant_id}")
+        elif req.method == "POST":
+            try:
+                req_body = req.get_json()
+                if req_body:
+                    tenant_id = req_body.get('tenant_id')
+                    logging.info(f"POST request with tenant_id in body: {tenant_id}")
+                else:
+                    # Try query parameter as fallback for POST
+                    tenant_id = req.params.get('tenant_id')
+                    logging.info(f"POST request with tenant_id parameter: {tenant_id}")
+            except ValueError:
+                # If JSON parsing fails, try query parameter
+                tenant_id = req.params.get('tenant_id')
+                logging.info(f"POST request with tenant_id parameter (JSON parse failed): {tenant_id}")
+        
+        if not tenant_id:
+            error_response = {
+                "success": False,
+                "data": [],
+                "metadata": {},
+                "actions": [],
+                "error": "Missing required parameter: tenant_id",
+                "usage": {
+                    "GET": "/api/tenant/analysis?tenant_id={tenant_id}",
+                    "POST": "/api/tenant/analysis with JSON body: {\"tenant_id\": \"...\"}"
+                }
+            }
+            logging.error("get_sps_report called without tenant_id parameter")
+            return func.HttpResponse(
+                json.dumps(error_response, indent=2),
+                status_code=400,
+                mimetype="application/json"
+            )
+        
+        # Get all configured tenants to validate and get tenant name
+        logging.info("Retrieving configured tenants...")
         tenants = get_tenants()
-        tenant = next((t for t in tenants if t["tenant_id"] == tenant_id), None)
-
-        if not tenant:
+        logging.info(f"Found {len(tenants)} configured tenant(s)")
+        
+        # Validate tenant_id against configured tenants
+        target_tenant = None
+        for tenant in tenants:
+            if tenant["tenant_id"] == tenant_id:
+                target_tenant = tenant
+                break
+        
+        if not target_tenant:
+            available_tenants = [{"name": t["name"], "tenant_id": t["tenant_id"]} for t in tenants]
+            error_response = {
+                "success": False,
+                "data": [],
+                "metadata": {},
+                "actions": [],
+                "error": f"Invalid tenant_id: {tenant_id}. Tenant not found in configured tenants.",
+                "provided_tenant_id": tenant_id,
+                "available_tenants": available_tenants
+            }
+            logging.error(f"get_sps_report called with invalid tenant_id: {tenant_id}")
             return func.HttpResponse(
-                f"Error: Tenant {tenant_id} not found", status_code=400
+                json.dumps(error_response, indent=2),
+                status_code=404,
+                mimetype="application/json"
             )
-
-        result = sync_hibp_breaches(tenant_id, tenant["name"])
-
-        if result["status"] == "success":
-            return func.HttpResponse(
-                f"HIBP sync completed for {tenant['name']}: {result['users_checked']} users checked, {result['breaches_found']} breaches found",
-                status_code=200,
+        
+        # Perform service principal analysis for the specific tenant
+        logging.info(f"Starting service principal analysis for tenant '{target_tenant['name']}' ({tenant_id})")
+        
+        # Use existing service principal analytics functionality
+        try:
+            from analysis.sp_analysis import (
+                analyze_service_principals,
+                format_analytics_json,
             )
-        else:
-            return func.HttpResponse(
-                f"HIBP sync failed: {result['error']}", status_code=500
+            
+            # Determine tenant mode
+            tenants = get_tenants()
+            tenant_mode = (
+                "single"
+                if len(tenants) == 1
+                and tenants[0]["tenant_id"] == "3aae0fb1-276f-42f8-8e4d-36ca10cbb779"
+                else "multi"
             )
-
+            
+            # Perform analytics using existing function
+            analytics_result = analyze_service_principals(tenant_mode)
+            
+            if analytics_result["status"] == "success":
+                # Format analytics result
+                json_result = format_analytics_json(analytics_result)
+                
+                # Extract relevant data for our tenant
+                tenant_data = None
+                if tenant_mode == "single":
+                    tenant_data = json_result.get("tenant_analytics", {})
+                    
+                    # Try alternative keys if tenant_analytics doesn't exist
+                    if not tenant_data:
+                        if "total_service_principals" in json_result:
+                            tenant_data = json_result
+                        elif "analytics" in json_result:
+                            tenant_data = json_result["analytics"]
+                        elif "data" in json_result:
+                            tenant_data = json_result["data"]
+                else:
+                    # For multi-tenant, find our specific tenant
+                    for tenant_analytics in json_result.get("tenant_analytics", []):
+                        if tenant_analytics.get("tenant_id") == tenant_id:
+                            tenant_data = tenant_analytics
+                            break
+                
+                if not tenant_data:
+                    available_tenants = []
+                    if tenant_mode == "multi":
+                        available_tenants = [t.get("tenant_id") for t in json_result.get("tenant_analytics", [])]
+                    raise Exception(f"No analytics data found for tenant {tenant_id}. Available: {available_tenants}")
+                
+                # Calculate custom metrics
+                total_sps = tenant_data.get("total_service_principals", 0)
+                disabled_sps = tenant_data.get("disabled_service_principals", 0)
+                enabled_sps = total_sps - disabled_sps  # Custom calculation
+                
+                # Calculate expiring credentials (within 30 days)
+                from datetime import datetime, timedelta
+                now = datetime.now()
+                thirty_days_from_now = now + timedelta(days=30)
+                
+                # Query service principals to check credential expiration dates
+                expiring_query = """
+                SELECT COUNT(*) as count
+                FROM service_principals 
+                WHERE tenant_id = ? 
+                AND credential_exp_date IS NOT NULL 
+                AND credential_exp_date != ''
+                AND datetime(credential_exp_date) BETWEEN datetime('now') AND datetime('now', '+30 days')
+                """
+                
+                expiring_result = query(expiring_query, (tenant_id,))
+                expiring_creds = expiring_result[0]["count"] if expiring_result else 0
+                
+                # Calculate owners count (service principals with owners)
+                owners_query = """
+                SELECT COUNT(*) as count
+                FROM service_principals 
+                WHERE tenant_id = ? 
+                AND owners IS NOT NULL 
+                AND owners != ''
+                """
+                
+                owners_result = query(owners_query, (tenant_id,))
+                owners_count = owners_result[0]["count"] if owners_result else 0
+                
+                # Calculate service principals with sign-in
+                sps_with_signin_query = """
+                SELECT COUNT(*) as count
+                FROM service_principals 
+                WHERE tenant_id = ? 
+                AND last_sign_in IS NOT NULL 
+                AND last_sign_in != ''
+                """
+                
+                sps_with_signin_result = query(sps_with_signin_query, (tenant_id,))
+                sps_with_signin_count = sps_with_signin_result[0]["count"] if sps_with_signin_result else 0
+                
+                # Calculate inactive service principals (no sign-in within past year only)
+                one_year_ago = now - timedelta(days=365)
+                inactive_query = """
+                SELECT COUNT(*) as count
+                FROM service_principals 
+                WHERE tenant_id = ? 
+                AND (last_sign_in IS NULL OR last_sign_in = '' OR datetime(last_sign_in) < datetime('now', '-365 days'))
+                """
+                
+                inactive_result = query(inactive_query, (tenant_id,))
+                inactive_count = inactive_result[0]["count"] if inactive_result else 0
+                
+                # Calculate risk level as percentage of inactive SPs
+                risk_level_percentage = round((inactive_count / total_sps * 100), 1) if total_sps > 0 else 0
+                
+                # Generate actions based on analytics results
+                actions = []
+                
+                # Check for inactive findings (use our calculated value)
+                if inactive_count > 0:
+                    actions.append({
+                        "title": "Review Inactive Service Principals",
+                        "description": f"{inactive_count} service principals with no sign-in activity within past year",
+                        "action": "review_inactive",
+                        "priority": "high",
+                        "count": inactive_count
+                    })
+                
+                # Check for expired credentials
+                expired_creds = tenant_data.get("expired_credentials", 0)
+                if expired_creds > 0:
+                    actions.append({
+                        "title": "Update Expired Credentials",
+                        "description": f"{expired_creds} service principals have expired credentials",
+                        "action": "update_credentials",
+                        "priority": "high",
+                        "count": expired_creds
+                    })
+                
+                # Check for expiring credentials (use our calculated value)
+                if expiring_creds > 0:
+                    actions.append({
+                        "title": "Renew Expiring Credentials",
+                        "description": f"{expiring_creds} service principals have credentials expiring within 30 days",
+                        "action": "renew_credentials",
+                        "priority": "medium",
+                        "count": expiring_creds
+                    })
+                
+                # Check for unused service principals
+                unused_count = tenant_data.get("unused_service_principals", 0)
+                if unused_count > 0:
+                    actions.append({
+                        "title": "Review Unused Service Principals",
+                        "description": f"{unused_count} service principals appear to be unused and could be removed",
+                        "action": "review_unused",
+                        "priority": "medium",
+                        "count": unused_count
+                    })
+                
+                # Check for overprivileged service principals
+                overprivileged_count = tenant_data.get("overprivileged_service_principals", 0)
+                if overprivileged_count > 0:
+                    actions.append({
+                        "title": "Review Overprivileged Service Principals",
+                        "description": f"{overprivileged_count} service principals may have excessive permissions",
+                        "action": "review_permissions",
+                        "priority": "medium",
+                        "count": overprivileged_count
+                    })
+                
+                # Build response following REST API guidance format for analysis
+                response = {
+                    "success": True,
+                    "data": [],  # Empty for analysis endpoints
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "tenant_name": target_tenant['name'],
+                        "total_service_principals": total_sps,
+                        "enabled_service_principals": enabled_sps,  # Custom calculation
+                        "disabled_service_principals": disabled_sps,
+                        "inactive_service_principals": inactive_count,  # Custom calculation
+                        "expired_credentials": tenant_data.get("expired_credentials", 0),
+                        "expiring_credentials": expiring_creds,  # Custom calculation
+                        "owners": owners_count,  # New metric
+                        "sps_with_sign_in": sps_with_signin_count,  # New metric
+                        "risk_level": risk_level_percentage,  # Percentage of high-risk SPs
+                        "analysis_timestamp": datetime.now().isoformat(),
+                        "endpoint": "get_sps_report",
+                        "request_method": req.method
+                    },
+                    "actions": actions
+                }
+                
+            else:
+                # Analytics failed, return error in proper format
+                error_msg = analytics_result.get('error', 'Unknown error')
+                error_response = {
+                    "success": False,
+                    "data": [],
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "tenant_name": target_tenant['name'],
+                        "endpoint": "get_sps_report",
+                        "request_method": req.method
+                    },
+                    "actions": [],
+                    "error": f"Service principal analytics failed: {error_msg}"
+                }
+                logging.error(f"✗ get_sps_report failed for {target_tenant['name']}: {error_msg}")
+                return func.HttpResponse(
+                    json.dumps(error_response, indent=2),
+                    status_code=500,
+                    mimetype="application/json"
+                )
+        
+        except Exception as analytics_error:
+            # Fallback to basic analysis if sp_analysis fails
+            logging.warning(f"Service principal analytics failed, falling back to basic analysis: {str(analytics_error)}")
+            
+            # Query service principals for basic analysis
+            service_principals_query = """
+            SELECT 
+                id,
+                app_id,
+                display_name,
+                publisher_name,
+                service_principal_type,
+                owners,
+                credential_exp_date,
+                credential_type,
+                enabled_sp,
+                last_sign_in,
+                synced_at
+            FROM service_principals 
+            WHERE tenant_id = ?
+            """
+            
+            service_principals = query(service_principals_query, (tenant_id,))
+            
+            # Basic analysis calculations
+            total_count = len(service_principals)
+            disabled_count = len([sp for sp in service_principals if not sp.get('enabled_sp')])
+            enabled_count = total_count - disabled_count  # Custom calculation
+            
+            # Calculate expiring credentials (within 30 days) for fallback
+            expiring_query = """
+            SELECT COUNT(*) as count
+            FROM service_principals 
+            WHERE tenant_id = ? 
+            AND credential_exp_date IS NOT NULL 
+            AND credential_exp_date != ''
+            AND datetime(credential_exp_date) BETWEEN datetime('now') AND datetime('now', '+30 days')
+            """
+            
+            expiring_result = query(expiring_query, (tenant_id,))
+            expiring_creds = expiring_result[0]["count"] if expiring_result else 0
+            
+            # Calculate owners count for fallback
+            owners_query = """
+            SELECT COUNT(*) as count
+            FROM service_principals 
+            WHERE tenant_id = ? 
+            AND owners IS NOT NULL 
+            AND owners != ''
+            """
+            
+            owners_result = query(owners_query, (tenant_id,))
+            owners_count = owners_result[0]["count"] if owners_result else 0
+            
+            # Calculate service principals with sign-in for fallback
+            sps_with_signin_query = """
+            SELECT COUNT(*) as count
+            FROM service_principals 
+            WHERE tenant_id = ? 
+            AND last_sign_in IS NOT NULL 
+            AND last_sign_in != ''
+            """
+            
+            sps_with_signin_result = query(sps_with_signin_query, (tenant_id,))
+            sps_with_signin_count = sps_with_signin_result[0]["count"] if sps_with_signin_result else 0
+            
+            # Calculate inactive service principals for fallback
+            inactive_query = """
+            SELECT COUNT(*) as count
+            FROM service_principals 
+            WHERE tenant_id = ? 
+            AND (last_sign_in IS NULL OR last_sign_in = '' OR datetime(last_sign_in) < datetime('now', '-365 days'))
+            """
+            
+            inactive_result = query(inactive_query, (tenant_id,))
+            inactive_count = inactive_result[0]["count"] if inactive_result else 0
+            
+            # Calculate risk level as percentage for fallback
+            risk_level_percentage = round((inactive_count / total_count * 100), 1) if total_count > 0 else 0
+            
+            # Build basic response
+            response = {
+                "success": True,
+                "data": [],
+                "metadata": {
+                    "tenant_id": tenant_id,
+                    "tenant_name": target_tenant['name'],
+                    "total_service_principals": total_count,
+                    "enabled_service_principals": enabled_count,
+                    "disabled_service_principals": disabled_count,
+                    "inactive_service_principals": inactive_count,
+                    "expiring_credentials": expiring_creds,
+                    "owners": owners_count,
+                    "sps_with_sign_in": sps_with_signin_count,
+                    "risk_level": risk_level_percentage,
+                    "analysis_timestamp": datetime.now().isoformat(),
+                    "endpoint": "get_sps_report",
+                    "request_method": req.method,
+                    "note": "Basic analysis used due to analytics engine failure"
+                },
+                "actions": []
+            }
+        
+        # Log completion and return response
+        action_count = len(response.get("actions", []))
+        total_sps = response["metadata"].get("total_service_principals", 0)
+        
+        logging.info(f"✓ get_sps_report completed for {target_tenant['name']}: analyzed {total_sps} service principals, generated {action_count} recommendations")
+        return func.HttpResponse(
+            json.dumps(response, indent=2),
+            status_code=200,
+            mimetype="application/json"
+        )
+            
     except Exception as e:
-        logging.error(f"Error in HIBP HTTP sync: {str(e)}")
-        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
-
-
-def get_azure_conditional_policies(tenant_id: str) -> list:
-    graph = GraphClient(tenant_id)
-    return graph.get("/policies/conditionalAccess/policies")
-
+        error_msg = f"Unexpected error during get_sps_report: {str(e)}"
+        logging.error(error_msg)
+        logging.exception("Full exception details:")
+        
+        error_result = {
+            "success": False,
+            "data": [],
+            "metadata": {},
+            "actions": [],
+            "error": error_msg,
+            "endpoint": "get_sps_report",
+            "timestamp": datetime.now().isoformat()
+        }
+        return func.HttpResponse(
+            json.dumps(error_result, indent=2),
+            status_code=500,
+            mimetype="application/json"
+        )

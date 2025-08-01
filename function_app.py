@@ -824,7 +824,7 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
 
 
 
-@app.route(route="tenant/users/disable", methods=["PATCH"])
+@app.route(route="users/{user_id}/disable", methods=["PATCH"])
 def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP PATCH endpoint to disable a single inactive user account"""
     # single tenant, single resource operation
@@ -1313,6 +1313,231 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
             headers={"Content-Type": "application/json"}
         )
 
+@app.route(route="users/{user_id}/reset-password", methods=["POST"])
+def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
+    """POST endpoint to reset a user's password with temporary password"""
+    # single tenant, single resource operation
+    
+    from datetime import datetime
+    
+    try:
+        # extract user_id from URL path
+        user_id = req.route_params.get('user_id')
+        
+        # extract and validate request data
+        logging.info(f"Processing password reset request for user {user_id}")
+        
+        req_body = req.get_json()
+        if not req_body:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "Request body is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # get parameters from request
+        tenant_id = req_body.get('tenant_id')
+        
+        # validate required parameters
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+            
+        if not user_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "user_id is required in URL path"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        execution_time = datetime.now().isoformat()
+        logging.info(f"Resetting password for user {user_id} in tenant: {tenant_name}")
+
+        # find and validate user exists in database
+        user_query = "SELECT * FROM users WHERE tenant_id = ? AND id = ?"
+        user_result = query(user_query, (tenant_id, user_id))
+        
+        if not user_result:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"User {user_id} not found in tenant {tenant_id}"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        user = user_result[0]
+        logging.info(f"Found user: {user['user_principal_name']}")
+
+        # check if user is disabled
+        if not user.get('account_enabled', True):
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Cannot reset password for disabled user {user['user_principal_name']}",
+                    "data": [{
+                        "user_id": user['id'],
+                        "user_principal_name": user['user_principal_name'],
+                        "status": "user_disabled"
+                    }],
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "tenant_name": tenant_name,
+                        "operation": "reset_user_password",
+                        "execution_time": execution_time
+                    },
+                    "actions": []
+                }),
+                status_code=422,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # reset password via Graph API
+        logging.info(f"Resetting password for user {user['user_principal_name']} via Graph API")
+        from core.graph_client import GraphClient
+        graph_client = GraphClient(tenant_id)
+        
+        reset_result = graph_client.reset_user_password(user['id'])
+        
+        if reset_result.get('status') != 'success':
+            error_msg = reset_result.get('error', 'Unknown error resetting password')
+            logging.error(f"Failed to reset password via Graph API: {error_msg}")
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to reset password: {error_msg}",
+                    "data": [{
+                        "user_id": user['id'],
+                        "user_principal_name": user['user_principal_name'],
+                        "status": "failed",
+                        "error": error_msg
+                    }],
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "tenant_name": tenant_name,
+                        "operation": "reset_user_password",
+                        "execution_time": execution_time,
+                        "summary": {
+                            "passwords_reset": 0,
+                            "failed": 1
+                        }
+                    },
+                    "actions": [{
+                        "type": "review_permissions",
+                        "description": "Review Graph API permissions for password reset",
+                        "users_affected": 1
+                    }]
+                }),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # update local database to track password reset
+        current_time = datetime.now().isoformat()
+        update_query = "UPDATE users SET synced_at = ? WHERE tenant_id = ? AND id = ?"
+        
+        try:
+            query(update_query, (current_time, tenant_id, user['id']))
+            logging.info(f"Updated local database for user {user['user_principal_name']}")
+        except Exception as db_error:
+            logging.warning(f"Graph API reset succeeded but local DB update failed for {user['user_principal_name']}: {str(db_error)}")
+
+        # prepare response data
+        user_data = {
+            "user_id": user['id'],
+            "user_principal_name": user['user_principal_name'],
+            "display_name": user.get('display_name'),
+            "status": "password_reset",
+            "reset_at": current_time,
+            "temporary_password": reset_result['temporary_password'],
+            "force_change_password": True
+        }
+
+        # build actions
+        actions = [
+            {
+                "type": "secure_delivery",
+                "description": "Securely deliver temporary password to user",
+                "users_affected": 1
+            },
+            {
+                "type": "monitor_login",
+                "description": "Monitor user's next login to confirm password change",
+                "users_affected": 1
+            }
+        ]
+
+        # build final response
+        response_data = {
+            "success": True,
+            "data": [user_data],
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "operation": "reset_user_password",
+                "execution_time": execution_time,
+                "summary": {
+                    "passwords_reset": 1,
+                    "failed": 0
+                }
+            },
+            "actions": actions
+        }
+        
+        logging.info(f"Successfully reset password for user {user['user_principal_name']}")
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        error_msg = f"Error in password reset operation: {str(e)}"
+        logging.error(error_msg)
+        
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg,
+                "data": [],
+                "metadata": {
+                    "tenant_id": req_body.get('tenant_id') if 'req_body' in locals() else None,
+                    "operation": "reset_user_password",
+                    "execution_time": datetime.now().isoformat()
+                },
+                "actions": []
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
 
 # REPORT GENERATION
 

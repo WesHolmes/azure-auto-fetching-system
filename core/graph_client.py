@@ -206,3 +206,86 @@ class GraphClient:
             error_msg = f"Unexpected error while disabling user {user_id}: {str(e)}"
             logging.error(error_msg)
             return {"status": "error", "error": error_msg}
+        
+    def reset_user_password(self, user_id):
+        """Reset a user's password with a secure temporary password and force change on next login"""
+        
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.get_token()}",
+                "Content-Type": "application/json",
+            }
+            
+            # Generate secure temporary password
+            import secrets
+            import string
+            # 12 character password with letters, digits, and special chars
+            temp_password = ''.join(secrets.choice(string.ascii_letters + string.digits + "!@#$%&*") for _ in range(12))
+            
+            # Microsoft Graph API endpoint to update user password
+            url = f"{self.base_url}/users/{user_id}"
+            
+            # Request body - always force change and set temp password
+            data = {
+                "passwordProfile": {
+                    "password": temp_password,
+                    "forceChangePasswordNextSignIn": True
+                }
+            }
+            
+            response = requests.patch(url, headers=headers, json=data)
+            
+            # Handle rate limiting
+            if response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", 5))
+                logging.warning(f"Rate limited while resetting password - waiting {retry_after} seconds")
+                time.sleep(retry_after)
+                response = requests.patch(url, headers=headers, json=data)
+            
+            # Enhanced error handling
+            if response.status_code == 401:
+                error_msg = f"401 Unauthorized - Cannot reset password for user {user_id}: Authentication failed"
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+                
+            elif response.status_code == 403:
+                error_msg = f"403 Forbidden - Cannot reset password for user {user_id}: Insufficient permissions"
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+                
+            elif response.status_code == 404:
+                error_msg = f"404 Not Found - User {user_id} does not exist"
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+                
+            elif response.status_code == 503:
+                error_msg = f"503 Service Unavailable - Microsoft Graph service temporarily unavailable"
+                logging.warning(error_msg)
+                return {"status": "error", "error": error_msg}
+            
+            # Check for success (204 No Content is expected for PATCH operations)
+            if response.status_code in [200, 204]:
+                logging.info(f"Successfully reset password for user {user_id}")
+                return {
+                    "status": "success", 
+                    "message": f"Password reset for user {user_id}",
+                    "temporary_password": temp_password
+                }
+            
+            # Handle other error status codes
+            response.raise_for_status()
+            return {
+                "status": "success", 
+                "message": f"Password reset for user {user_id}",
+                "temporary_password": temp_password
+            }
+            
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Network error while resetting password for user {user_id}: {str(e)}"
+            logging.error(error_msg)
+            return {"status": "error", "error": error_msg}
+            
+        except Exception as e:
+            error_msg = f"Unexpected error while resetting password for user {user_id}: {str(e)}"
+            logging.error(error_msg)
+            return {"status": "error", "error": error_msg}

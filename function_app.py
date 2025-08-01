@@ -985,7 +985,7 @@ def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
 
         # update local database to reflect disabled status
         current_time = datetime.now().isoformat()
-        update_query = "UPDATE users SET account_enabled = 0, last_update = ? WHERE tenant_id = ? AND id = ?"
+        update_query = "UPDATE users SET account_enabled = 0, synced_at = ? WHERE tenant_id = ? AND id = ?"
         
         try:
             query(update_query, (current_time, tenant_id, user['id']))

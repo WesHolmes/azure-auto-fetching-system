@@ -2,6 +2,7 @@ import logging
 import azure.functions as func
 from core.graph_client import GraphClient
 from core.tenant_manager import get_tenants
+from core.graph_client import GraphClient
 from sync.user_sync import sync_users
 from sync.service_principal_sync import sync_service_principals
 from sync.license_sync import sync_licenses
@@ -17,13 +18,15 @@ from datetime import datetime, timedelta
 from core.database import query
 import json
 import re
+from sync.hibp_sync import sync_hibp_breaches
 
 app = func.FunctionApp()
+
 
 def extract_error_code(error_message):
     """Extract HTTP error code from error message"""
     # Look for patterns like "403 Forbidden", "401 Unauthorized", etc.
-    match = re.search(r'(\d{3})\s+\w+', str(error_message))
+    match = re.search(r"(\d{3})\s+\w+", str(error_message))
     if match:
         return int(match.group(1))
     return None
@@ -38,7 +41,9 @@ def log_error_summary(error_counts, sync_type):
     else:
         logging.info(f"{sync_type} completed with no errors")
 
+
 # TIMER TRIGGERS (Scheduled Functions)
+
 
 @app.schedule(
     schedule="0 0 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False
@@ -46,50 +51,58 @@ def log_error_summary(error_counts, sync_type):
 def users_sync(timer: func.TimerRequest) -> None:
     if timer.past_due:
         logging.warning("User sync timer is past due!")
-    
+
     tenants = get_tenants()
     tenants.reverse()  # Process in reverse order
     results = []
-    
+
     for tenant in tenants:
         try:
             result = sync_users(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
-                logging.info(f"✓ {tenant['name']}: {result['users_synced']} users synced")
-                results.append({
-                    'status': 'completed',
-                    'tenant_id': tenant["tenant_id"],
-                    'users_synced': result["users_synced"]
-                })
-                
+                logging.info(
+                    f"✓ {tenant['name']}: {result['users_synced']} users synced"
+                )
+                results.append(
+                    {
+                        "status": "completed",
+                        "tenant_id": tenant["tenant_id"],
+                        "users_synced": result["users_synced"],
+                    }
+                )
+
                 # Run analysis after successful sync
                 try:
                     inactive_result = calculate_inactive_users(tenant["tenant_id"])
-                    logging.info(f"  Inactive users: {inactive_result.get('inactive_count', 0)}")
-                    
+                    logging.info(
+                        f"  Inactive users: {inactive_result.get('inactive_count', 0)}"
+                    )
+
                     mfa_result = calculate_mfa_compliance(tenant["tenant_id"])
-                    logging.info(f"  MFA compliance: {mfa_result.get('compliance_rate', 0)}%")
-                    
+                    logging.info(
+                        f"  MFA compliance: {mfa_result.get('compliance_rate', 0)}%"
+                    )
+
                 except Exception as e:
                     logging.error(f"Analysis error: {str(e)}")
-                    
+
             else:
                 logging.error(f"✗ {tenant['name']}: {result['error']}")
-                results.append({
-                    'status': 'error',
-                    'tenant_id': tenant["tenant_id"],
-                    'error': result.get("error", "Unknown error")
-                })
+                results.append(
+                    {
+                        "status": "error",
+                        "tenant_id": tenant["tenant_id"],
+                        "error": result.get("error", "Unknown error"),
+                    }
+                )
         except Exception as e:
             logging.error(f"✗ {tenant['name']}: {str(e)}")
-            results.append({
-                'status': 'error',
-                'tenant_id': tenant["tenant_id"],
-                'error': str(e)
-            })
-    
+            results.append(
+                {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
+            )
+
     # Use centralized error reporting
-    failed_count = len([r for r in results if r['status'] == 'error'])
+    failed_count = len([r for r in results if r["status"] == "error"])
     if failed_count > 0:
         categorize_sync_errors(results, "User")
 
@@ -100,36 +113,40 @@ def users_sync(timer: func.TimerRequest) -> None:
 def licenses_sync(timer: func.TimerRequest) -> None:
     if timer.past_due:
         logging.warning("License sync timer is past due!")
-    
+
     tenants = get_tenants()
     results = []
-    
+
     for tenant in tenants:
         try:
             result = sync_licenses(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
-                logging.info(f"✓ {tenant['name']}: {result['licenses_synced']} licenses synced")
-                results.append({
-                    'status': 'completed',
-                    'tenant_id': tenant["tenant_id"],
-                    'licenses_synced': result["licenses_synced"]
-                })
+                logging.info(
+                    f"✓ {tenant['name']}: {result['licenses_synced']} licenses synced"
+                )
+                results.append(
+                    {
+                        "status": "completed",
+                        "tenant_id": tenant["tenant_id"],
+                        "licenses_synced": result["licenses_synced"],
+                    }
+                )
             else:
                 logging.error(f"✗ {tenant['name']}: {result['error']}")
-                results.append({
-                    'status': 'error',
-                    'tenant_id': tenant["tenant_id"],
-                    'error': result.get("error", "Unknown error")
-                })
+                results.append(
+                    {
+                        "status": "error",
+                        "tenant_id": tenant["tenant_id"],
+                        "error": result.get("error", "Unknown error"),
+                    }
+                )
         except Exception as e:
             logging.error(f"✗ {tenant['name']}: {str(e)}")
-            results.append({
-                'status': 'error',
-                'tenant_id': tenant["tenant_id"],
-                'error': str(e)
-            })
-    
-    failed_count = len([r for r in results if r['status'] == 'error'])
+            results.append(
+                {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
+            )
+
+    failed_count = len([r for r in results if r["status"] == "error"])
     if failed_count > 0:
         categorize_sync_errors(results, "License")
 
@@ -140,36 +157,42 @@ def licenses_sync(timer: func.TimerRequest) -> None:
 def applications_sync(timer: func.TimerRequest) -> None:
     if timer.past_due:
         logging.warning("Service principal sync timer is past due!")
-    
+
     tenants = get_tenants()
     results = []
-    
+
     for tenant in tenants:
         try:
             result = sync_service_principals(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
-                logging.info(f"✓ {tenant['name']}: {result['service_principals_synced']} service principals synced")
-                results.append({
-                    'status': 'completed',
-                    'tenant_id': tenant["tenant_id"],
-                    'service_principals_synced': result["service_principals_synced"]
-                })
+                logging.info(
+                    f"✓ {tenant['name']}: {result['service_principals_synced']} service principals synced"
+                )
+                results.append(
+                    {
+                        "status": "completed",
+                        "tenant_id": tenant["tenant_id"],
+                        "service_principals_synced": result[
+                            "service_principals_synced"
+                        ],
+                    }
+                )
             else:
                 logging.error(f"✗ {tenant['name']}: {result['error']}")
-                results.append({
-                    'status': 'error',
-                    'tenant_id': tenant["tenant_id"],
-                    'error': result.get("error", "Unknown error")
-                })
+                results.append(
+                    {
+                        "status": "error",
+                        "tenant_id": tenant["tenant_id"],
+                        "error": result.get("error", "Unknown error"),
+                    }
+                )
         except Exception as e:
             logging.error(f"✗ {tenant['name']}: {str(e)}")
-            results.append({
-                'status': 'error',
-                'tenant_id': tenant["tenant_id"],
-                'error': str(e)
-            })
-    
-    failed_count = len([r for r in results if r['status'] == 'error'])
+            results.append(
+                {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
+            )
+
+    failed_count = len([r for r in results if r["status"] == "error"])
     if failed_count > 0:
         categorize_sync_errors(results, "Service Principal")
 
@@ -207,10 +230,12 @@ def policies_sync(timer: func.TimerRequest) -> None:
 
     tenants = get_tenants()
     error_counts = {}
-    
+
     for tenant in tenants:
         try:
-            result = sync_conditional_access_policies(tenant["tenant_id"], tenant["name"])
+            result = sync_conditional_access_policies(
+                tenant["tenant_id"], tenant["name"]
+            )
             if result["status"] == "success":
                 logging.info(
                     f"✓ {tenant['name']}: {result['policies_synced']} conditional access policies, {result['policy_users_synced']} user assignments, {result['policy_applications_synced']} application assignments synced"
@@ -218,7 +243,7 @@ def policies_sync(timer: func.TimerRequest) -> None:
             else:
                 logging.error(f"✗ {tenant['name']}: {result['error']}")
                 # Track error codes from the sync result
-                error_code = extract_error_code(result['error'])
+                error_code = extract_error_code(result["error"])
                 if error_code:
                     error_counts[error_code] = error_counts.get(error_code, 0) + 1
         except Exception as e:
@@ -227,47 +252,50 @@ def policies_sync(timer: func.TimerRequest) -> None:
             error_code = extract_error_code(str(e))
             if error_code:
                 error_counts[error_code] = error_counts.get(error_code, 0) + 1
-    
+
     # Log error summary at the end
     log_error_summary(error_counts, "Policies sync")
 
 
 # HTTP TRIGGERS (Manual Endpoints)
 
+
 @app.route(route="sync/users", methods=["POST"])
 def user_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     tenants = get_tenants()
     total = 0
     results = []
-    
+
     for tenant in tenants:
         try:
             result = sync_users(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
                 total += result["users_synced"]
-                results.append({
-                    'status': 'completed',
-                    'tenant_id': tenant["tenant_id"],
-                    'users_synced': result["users_synced"]
-                })
+                results.append(
+                    {
+                        "status": "completed",
+                        "tenant_id": tenant["tenant_id"],
+                        "users_synced": result["users_synced"],
+                    }
+                )
             else:
-                results.append({
-                    'status': 'error',
-                    'tenant_id': tenant["tenant_id"],
-                    'error': result.get("error", "Unknown error")
-                })
+                results.append(
+                    {
+                        "status": "error",
+                        "tenant_id": tenant["tenant_id"],
+                        "error": result.get("error", "Unknown error"),
+                    }
+                )
         except Exception as e:
             logging.error(f"Error syncing users for {tenant['name']}: {str(e)}")
-            results.append({
-                'status': 'error',
-                'tenant_id': tenant["tenant_id"],
-                'error': str(e)
-            })
+            results.append(
+                {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
+            )
 
-    failed_count = len([r for r in results if r['status'] == 'error'])
+    failed_count = len([r for r in results if r["status"] == "error"])
     if failed_count > 0:
         categorize_sync_errors(results, "User")
-    
+
     return func.HttpResponse(f"Synced {total} users", status_code=200)
 
 
@@ -277,39 +305,41 @@ def license_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     total_licenses = 0
     total_assignments = 0
     results = []
-    
+
     for tenant in tenants:
         try:
             result = sync_licenses(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
                 total_licenses += result["licenses_synced"]
                 total_assignments += result["user_licenses_synced"]
-                results.append({
-                    'status': 'completed',
-                    'tenant_id': tenant["tenant_id"],
-                    'licenses_synced': result["licenses_synced"],
-                    'user_licenses_synced': result["user_licenses_synced"]
-                })
+                results.append(
+                    {
+                        "status": "completed",
+                        "tenant_id": tenant["tenant_id"],
+                        "licenses_synced": result["licenses_synced"],
+                        "user_licenses_synced": result["user_licenses_synced"],
+                    }
+                )
             else:
-                results.append({
-                    'status': 'error',
-                    'tenant_id': tenant["tenant_id"],
-                    'error': result.get("error", "Unknown error")
-                })
+                results.append(
+                    {
+                        "status": "error",
+                        "tenant_id": tenant["tenant_id"],
+                        "error": result.get("error", "Unknown error"),
+                    }
+                )
         except Exception as e:
             logging.error(f"Error syncing licenses for {tenant['name']}: {str(e)}")
-            results.append({
-                'status': 'error',
-                'tenant_id': tenant["tenant_id"],
-                'error': str(e)
-            })
+            results.append(
+                {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
+            )
 
-    failed_count = len([r for r in results if r['status'] == 'error'])
+    failed_count = len([r for r in results if r["status"] == "error"])
     if failed_count > 0:
         categorize_sync_errors(results, "License")
-    
+
     return func.HttpResponse(
-        f"Synced {total_licenses} licenses and {total_assignments} user assignments", 
+        f"Synced {total_licenses} licenses and {total_assignments} user assignments",
         status_code=200,
     )
 
@@ -319,35 +349,41 @@ def application_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     tenants = get_tenants()
     total = 0
     results = []
-    
+
     for tenant in tenants:
         try:
             result = sync_service_principals(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
                 total += result["service_principals_synced"]
-                results.append({
-                    'status': 'completed',
-                    'tenant_id': tenant["tenant_id"],
-                    'service_principals_synced': result["service_principals_synced"]
-                })
+                results.append(
+                    {
+                        "status": "completed",
+                        "tenant_id": tenant["tenant_id"],
+                        "service_principals_synced": result[
+                            "service_principals_synced"
+                        ],
+                    }
+                )
             else:
-                results.append({
-                    'status': 'error',
-                    'tenant_id': tenant["tenant_id"],
-                    'error': result.get("error", "Unknown error")
-                })
+                results.append(
+                    {
+                        "status": "error",
+                        "tenant_id": tenant["tenant_id"],
+                        "error": result.get("error", "Unknown error"),
+                    }
+                )
         except Exception as e:
-            logging.error(f"Error syncing service principals for {tenant['name']}: {str(e)}")
-            results.append({
-                'status': 'error',
-                'tenant_id': tenant["tenant_id"],
-                'error': str(e)
-            })
+            logging.error(
+                f"Error syncing service principals for {tenant['name']}: {str(e)}"
+            )
+            results.append(
+                {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
+            )
 
-    failed_count = len([r for r in results if r['status'] == 'error'])
+    failed_count = len([r for r in results if r["status"] == "error"])
     if failed_count > 0:
         categorize_sync_errors(results, "Service Principal")
-    
+
     return func.HttpResponse(f"Synced {total} service principals", status_code=200)
 
 
@@ -389,13 +425,15 @@ def policies_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 
     for tenant in tenants:
         try:
-            result = sync_conditional_access_policies(tenant["tenant_id"], tenant["name"])
+            result = sync_conditional_access_policies(
+                tenant["tenant_id"], tenant["name"]
+            )
             if result["status"] == "success":
                 total_policies += result["policies_synced"]
                 total_policy_users += result["policy_users_synced"]
             else:
                 # Track error codes from the sync result
-                error_code = extract_error_code(result['error'])
+                error_code = extract_error_code(result["error"])
                 if error_code:
                     error_counts[error_code] = error_counts.get(error_code, 0) + 1
         except Exception as e:
@@ -406,11 +444,14 @@ def policies_sync_http(req: func.HttpRequest) -> func.HttpResponse:
             error_code = extract_error_code(str(e))
             if error_code:
                 error_counts[error_code] = error_counts.get(error_code, 0) + 1
-    
+
     # Log error summary
     log_error_summary(error_counts, "Policies HTTP sync")
 
-    return func.HttpResponse(f"Synced {total_policies} conditional access policies and {total_policy_users} user assignments", status_code=200)
+    return func.HttpResponse(
+        f"Synced {total_policies} conditional access policies and {total_policy_users} user assignments",
+        status_code=200,
+    )
 
 
 @app.route(route="tenant/users", methods=["GET"])
@@ -1541,6 +1582,7 @@ def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
 
 # REPORT GENERATION
 
+
 @app.schedule(
     schedule="0 0 6 * * *", arg_name="timer", run_on_startup=False, use_monitor=False
 )
@@ -1559,57 +1601,84 @@ def generate_user_report(timer: func.TimerRequest) -> None:
         recent_sync_errors = aggregate_recent_sync_errors()
         successful_tenants_info = recent_sync_errors["successful_tenants"]
         failed_count = recent_sync_errors["failed_count"]
-        
+
         # Remove helper fields from final output
         recent_sync_errors.pop("successful_tenants", None)
         recent_sync_errors.pop("failed_count", None)
-        
-        logging.info(f"Processing {len(successful_tenants_info)} successful tenants (excluding {failed_count} failed syncs)")
-        
+
+        logging.info(
+            f"Processing {len(successful_tenants_info)} successful tenants (excluding {failed_count} failed syncs)"
+        )
+
         # Process successful tenants
         tenant_summaries = []
 
         for tenant_info in successful_tenants_info:
-            tenant = next((t for t in all_tenants if t["tenant_id"] == tenant_info["tenant_id"]), None)
+            tenant = next(
+                (t for t in all_tenants if t["tenant_id"] == tenant_info["tenant_id"]),
+                None,
+            )
             if not tenant:
                 continue
-                
+
             try:
                 tenant_id = tenant["tenant_id"]
                 tenant_name = tenant["name"]
-                
+
                 # Get basic metrics
-                total_users_result = query("SELECT COUNT(*) as count FROM users WHERE tenant_id = ?", (tenant_id,))
-                active_users_result = query("SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND account_enabled = 1", (tenant_id,))
-                
+                total_users_result = query(
+                    "SELECT COUNT(*) as count FROM users WHERE tenant_id = ?",
+                    (tenant_id,),
+                )
+                active_users_result = query(
+                    "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND account_enabled = 1",
+                    (tenant_id,),
+                )
+
                 # Get analysis results
                 mfa_result = calculate_mfa_compliance(tenant_id)
                 license_result = calculate_license_optimization(tenant_id)
-                
+
                 # Calculate metrics
-                total_users = total_users_result[0]["count"] if total_users_result else 0
-                active_users = active_users_result[0]["count"] if active_users_result else 0
+                total_users = (
+                    total_users_result[0]["count"] if total_users_result else 0
+                )
+                active_users = (
+                    active_users_result[0]["count"] if active_users_result else 0
+                )
                 inactive_users = total_users - active_users
-                
+
                 # Generate warnings
                 warnings = []
                 mfa_compliance = mfa_result.get("compliance_rate", 0)
                 admin_non_compliant = mfa_result.get("admin_non_compliant", 0)
                 monthly_savings = license_result.get("estimated_monthly_savings", 0)
                 underutilized_count = license_result.get("underutilized_licenses", 0)
-                
+
                 if admin_non_compliant > 0:
-                    warnings.append(f"CRITICAL: {admin_non_compliant} admin users without MFA - HIGH SECURITY RISK")
-                
+                    warnings.append(
+                        f"CRITICAL: {admin_non_compliant} admin users without MFA - HIGH SECURITY RISK"
+                    )
+
                 if mfa_compliance < 50:
-                    warnings.append(f"WARNING: Low MFA compliance ({mfa_compliance}%) - Security risk")
-                
+                    warnings.append(
+                        f"WARNING: Low MFA compliance ({mfa_compliance}%) - Security risk"
+                    )
+
                 if monthly_savings > 100:
-                    warnings.append(f"COST OPPORTUNITY: ${monthly_savings}/month potential savings from {underutilized_count} unused licenses")
-                
-                inactive_percentage = round((inactive_users / total_users * 100), 1) if total_users > 0 else 0
+                    warnings.append(
+                        f"COST OPPORTUNITY: ${monthly_savings}/month potential savings from {underutilized_count} unused licenses"
+                    )
+
+                inactive_percentage = (
+                    round((inactive_users / total_users * 100), 1)
+                    if total_users > 0
+                    else 0
+                )
                 if inactive_percentage > 25:
-                    warnings.append(f"WARNING: High inactive user rate ({inactive_percentage}%) may indicate cleanup needed")
+                    warnings.append(
+                        f"WARNING: High inactive user rate ({inactive_percentage}%) may indicate cleanup needed"
+                    )
 
                 # Build tenant summary
                 tenant_summary = {
@@ -1623,15 +1692,15 @@ def generate_user_report(timer: func.TimerRequest) -> None:
                     "admin_non_compliant": admin_non_compliant,
                     "estimated_monthly_savings": monthly_savings,
                     "underutilized_licenses": underutilized_count,
-                    "warnings": warnings
+                    "warnings": warnings,
                 }
-                
+
                 tenant_summaries.append(tenant_summary)
-                
+
                 # Log individual tenant summary
                 logging.info(f"Report for {tenant_name}:")
                 logging.info(json.dumps(tenant_summary, indent=2))
-                
+
             except Exception as e:
                 logging.error(f"Error processing {tenant['name']}: {e}")
 
@@ -1641,15 +1710,17 @@ def generate_user_report(timer: func.TimerRequest) -> None:
                 "total_tenants": total_tenants,
                 "successful_tenants": len(successful_tenants_info),
                 "failed_tenants": failed_count,
-                "generation_timestamp": datetime.now().isoformat()
+                "generation_timestamp": datetime.now().isoformat(),
             },
             "tenant_reports": tenant_summaries,
-            "recent_sync_errors": recent_sync_errors
+            "recent_sync_errors": recent_sync_errors,
         }
-        
+
         # Log comprehensive report
         logging.info(json.dumps(comprehensive_report, indent=2))
-        logging.info(f"Report generation completed: {len(tenant_summaries)}/{total_tenants} successful")
+        logging.info(
+            f"Report generation completed: {len(tenant_summaries)}/{total_tenants} successful"
+        )
 
     except Exception as e:
         logging.error(f"Critical error in report generation: {str(e)}")
@@ -1661,16 +1732,17 @@ def generate_report_manual(req: func.HttpRequest) -> func.HttpResponse:
     """Manual HTTP trigger to run report generation"""
     try:
         logging.info("Manual report generation triggered via HTTP")
-        
+
         # Run report generation in background (non-blocking)
         import asyncio
+
         asyncio.create_task(generate_user_report(None))
-        
+
         return func.HttpResponse(
             "Report generation started in background. Check logs for results.",
-            status_code=202
+            status_code=202,
         )
-        
+
     except Exception as e:
         error_msg = f"Error triggering report generation: {str(e)}"
         logging.error(error_msg)
@@ -1686,7 +1758,7 @@ def service_principal_analytics(timer: func.TimerRequest) -> None:
 
     try:
         import json
-        from analytics.service_principal_analytics import (
+        from analysis.sp_analysis import (
             analyze_service_principals,
             format_analytics_json,
         )
@@ -1708,10 +1780,12 @@ def service_principal_analytics(timer: func.TimerRequest) -> None:
         if analytics_result["status"] == "success":
             # Format and log as clean JSON
             json_result = format_analytics_json(analytics_result)
-            logging.info(f"Service Principal Analytics Result: {json.dumps(json_result, indent=2)}")
+            logging.info(
+                f"Service Principal Analytics Result: {json.dumps(json_result, indent=2)}"
+            )
 
         else:
-            error_result = {"status": "error", "error": analytics_result['error']}
+            error_result = {"status": "error", "error": analytics_result["error"]}
             logging.error(f"Analytics failed: {json.dumps(error_result)}")
 
     except Exception as e:
@@ -1723,7 +1797,7 @@ def service_principal_analytics(timer: func.TimerRequest) -> None:
 def service_principal_analytics_http(req: func.HttpRequest) -> func.HttpResponse:
     try:
         import json
-        from analytics.service_principal_analytics import (
+        from analysis.sp_analysis import (
             analyze_service_principals,
             format_analytics_json,
         )
@@ -1742,23 +1816,103 @@ def service_principal_analytics_http(req: func.HttpRequest) -> func.HttpResponse
         if analytics_result["status"] == "success":
             json_result = format_analytics_json(analytics_result)
             return func.HttpResponse(
-                json.dumps(json_result, indent=2), 
-                status_code=200, 
-                mimetype="application/json"
+                json.dumps(json_result, indent=2),
+                status_code=200,
+                mimetype="application/json",
             )
         else:
-            error_result = {"status": "error", "error": analytics_result['error']}
+            error_result = {"status": "error", "error": analytics_result["error"]}
             return func.HttpResponse(
-                json.dumps(error_result, indent=2), 
-                status_code=500, 
-                mimetype="application/json"
+                json.dumps(error_result, indent=2),
+                status_code=500,
+                mimetype="application/json",
             )
 
     except Exception as e:
         logging.error(f"Service principal analytics HTTP failed: {str(e)}")
         error_result = {"status": "error", "error": str(e)}
+
         return func.HttpResponse(
-            json.dumps(error_result, indent=2), 
-            status_code=500, 
-            mimetype="application/json"
+            json.dumps(error_result, indent=2),
+            status_code=500,
+            mimetype="application/json",
         )
+
+
+@app.timer_trigger(
+    schedule="0 0 1 * * FRI",
+    arg_name="myTimer",
+    use_monitor=False,
+    run_on_startup=False,
+)
+def hibp_sync_timer(myTimer: func.TimerRequest) -> None:
+    """Check all users for data breaches weekly"""
+    if myTimer.past_due:
+        logging.warning("HIBP sync timer is past due!")
+
+    tenants = get_tenants()
+
+    # Create single database connection for all tenants
+    from sql.hibp_db import HIBPDB
+
+    db = HIBPDB()
+
+    try:
+        # Process all tenants using list comprehension
+        results = [
+            sync_hibp_breaches(tenant["tenant_id"], tenant["name"], db)
+            for tenant in tenants
+        ]
+
+        # Log results
+        for i, result in enumerate(results):
+            tenant_name = tenants[i]["name"]
+            if result["status"] == "success":
+                logging.info(
+                    f"✓ {tenant_name}: {result['users_checked']} users checked, {result['breaches_found']} breaches found"
+                )
+            else:
+                logging.error(f"✗ {tenant_name}: {result['error']}")
+    finally:
+        db.close()
+
+
+@app.route(route="sync/hibp", methods=["POST"])
+def hibp_sync_http(req: func.HttpRequest) -> func.HttpResponse:
+    """Manual trigger for HIBP breach check for a specific tenant"""
+    try:
+        req_body = req.get_json()
+        tenant_id = (
+            req_body.get("tenant_id") if req_body else req.params.get("tenant_id")
+        )
+
+        # Get tenant info
+        tenants = get_tenants()
+        tenant = next((t for t in tenants if t["tenant_id"] == tenant_id), None)
+
+        if not tenant:
+            return func.HttpResponse(
+                f"Error: Tenant {tenant_id} not found", status_code=400
+            )
+
+        result = sync_hibp_breaches(tenant_id, tenant["name"])
+
+        if result["status"] == "success":
+            return func.HttpResponse(
+                f"HIBP sync completed for {tenant['name']}: {result['users_checked']} users checked, {result['breaches_found']} breaches found",
+                status_code=200,
+            )
+        else:
+            return func.HttpResponse(
+                f"HIBP sync failed: {result['error']}", status_code=500
+            )
+
+    except Exception as e:
+        logging.error(f"Error in HIBP HTTP sync: {str(e)}")
+        return func.HttpResponse(f"Error: {str(e)}", status_code=500)
+
+
+def get_azure_conditional_policies(tenant_id: str) -> list:
+    graph = GraphClient(tenant_id)
+    return graph.get("/policies/conditionalAccess/policies")
+

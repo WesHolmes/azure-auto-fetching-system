@@ -1,5 +1,6 @@
 import logging
 import azure.functions as func
+from core.graph_client import GraphClient
 from core.tenant_manager import get_tenants
 from core.graph_client import GraphClient
 from sync.user_sync import sync_users
@@ -13,7 +14,7 @@ from analysis.user_analysis import (
     calculate_mfa_compliance,
     calculate_license_optimization,
 )
-from datetime import datetime
+from datetime import datetime, timedelta
 from core.database import query
 import json
 import re
@@ -453,6 +454,1132 @@ def policies_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
+@app.route(route="tenant/users", methods=["GET"])
+def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single tenant user data"""
+    # Returns structured response with user optimization actions
+    
+    try:
+        # extract & validate tenant id
+        tenant_id = req.params.get('tenant_id')
+        logging.info(f"Users API request for tenant: {tenant_id}")
+        
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id parameter is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        logging.info(f"Processing user data for tenant: {tenant_name}")
+
+        # grab user data
+        # basic user counts
+        total_users_query = "SELECT COUNT(*) as count FROM users WHERE tenant_id = ?"
+        total_users_result = query(total_users_query, (tenant_id,))
+        
+        active_users_query = "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND account_enabled = 1"
+        active_users_result = query(active_users_query, (tenant_id,))
+        
+        # admin users count
+        admin_users_query = "SELECT COUNT(DISTINCT user_id) as count FROM user_roles WHERE tenant_id = ?"
+        admin_users_result = query(admin_users_query, (tenant_id,))
+        
+        # never signed in users
+        never_signed_in_query = "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND last_sign_in IS NULL AND account_enabled = 1"
+        never_signed_in_result = query(never_signed_in_query, (tenant_id,))
+        
+        # grab analysis data
+        mfa_result = calculate_mfa_compliance(tenant_id)
+        inactive_result = calculate_inactive_users(tenant_id)
+
+        # calculate metrics
+        total_users = total_users_result[0]["count"] if total_users_result else 0
+        active_users = active_users_result[0]["count"] if active_users_result else 0
+        inactive_users = total_users - active_users
+        admin_users = admin_users_result[0]["count"] if admin_users_result else 0
+        never_signed_in = never_signed_in_result[0]["count"] if never_signed_in_result else 0
+        
+        # generate user optimization actions
+        actions = []
+        
+        # action 1: never signed in users
+        if never_signed_in > 0:
+            actions.append({
+                "title": "Review Unused Accounts",
+                "description": f"{never_signed_in} users have never signed in - consider deactivating",
+                "action": "review"
+            })
+        
+        # action 2: inactive users
+        if inactive_users > 0:
+            actions.append({
+                "title": "Review Inactive Users",
+                "description": f"{inactive_users} inactive user accounts - verify if still needed",
+                "action": "review"
+            })
+        
+        # action 3: MFA non-compliance
+        non_compliant_users = mfa_result.get('non_compliant', 0)
+        if non_compliant_users > 0:
+            actions.append({
+                "title": "Enable MFA for Users",
+                "description": f"{non_compliant_users} users without MFA enabled - security risk",
+                "action": "secure"
+            })
+        
+        # action 4: admin MFA compliance
+        admin_non_compliant = mfa_result.get('admin_non_compliant', 0)
+        if admin_non_compliant > 0:
+            actions.append({
+                "title": "Secure Admin Accounts",
+                "description": f"{admin_non_compliant} admin users without MFA - critical security risk",
+                "action": "secure"
+            })
+
+        # build response structure
+        response_data = {
+            "success": True,
+            "data": [],  # empty for metadata endpoints
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "timestamp": datetime.now().isoformat(),
+                "total_users": total_users,
+                "active_users": active_users,
+                "inactive_users": inactive_users,
+                "admin_users": admin_users,
+                "never_signed_in_users": never_signed_in,
+                "mfa_compliance_rate": mfa_result.get('compliance_rate', 0),
+                "mfa_enabled_users": mfa_result.get('mfa_enabled', 0),
+                "risk_level": mfa_result.get('risk_level', 'unknown')
+            },
+            "actions": actions[:4]  # limit to maximum 4 actions
+        }
+        
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        error_msg = f"Error retrieving user data: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
+
+@app.route(route="tenant/licenses", methods=["GET"])
+def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single tenant license data"""
+    # Returns structured response with license optimization actions only
+    
+    try:
+        # extract & validate tenant id
+        tenant_id = req.params.get('tenant_id')
+        logging.info(f"Licenses API request for tenant: {tenant_id}")
+        
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id parameter is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        logging.info(f"Processing license data for tenant: {tenant_name}")
+
+        # grab license data
+        # total license types
+        total_licenses_query = "SELECT COUNT(DISTINCT license_display_name) as count FROM licenses WHERE tenant_id = ?"
+        total_licenses_result = query(total_licenses_query, (tenant_id,))
+        
+        # total license assignments
+        total_assignments_query = "SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ?"
+        total_assignments_result = query(total_assignments_query, (tenant_id,))
+        
+        # active license assignments
+        active_assignments_query = "SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ? AND is_active = 1"
+        active_assignments_result = query(active_assignments_query, (tenant_id,))
+        
+        # total monthly cost for active licenses
+        total_cost_query = "SELECT SUM(monthly_cost) as total_cost FROM user_licenses WHERE tenant_id = ? AND is_active = 1"
+        total_cost_result = query(total_cost_query, (tenant_id,))
+        
+        # grab license optimization data
+        license_optimization = calculate_license_optimization(tenant_id)
+
+        # calculate metrics
+        total_license_types = total_licenses_result[0]["count"] if total_licenses_result else 0
+        total_assignments = total_assignments_result[0]["count"] if total_assignments_result else 0
+        active_assignments = active_assignments_result[0]["count"] if active_assignments_result else 0
+        inactive_assignments = total_assignments - active_assignments
+        monthly_cost = round(total_cost_result[0]["total_cost"] or 0, 2) if total_cost_result else 0
+        utilization_rate = license_optimization.get("utilization_rate", 0)
+        monthly_savings = license_optimization.get("estimated_monthly_savings", 0)
+
+        # generate license-specific optimization actions
+        actions = []
+        
+        # action 1: inactive license assignments (license-focused)
+        if inactive_assignments > 0:
+            actions.append({
+                "title": "Remove Inactive License Assignments",
+                "description": f"{inactive_assignments} inactive license assignments wasting budget",
+                "action": "cleanup"
+            })
+
+        # action 2: low utilization licenses
+        if utilization_rate < 70:
+            actions.append({
+                "title": "Investigate Low License Utilization", 
+                "description": f"Only {utilization_rate}% license utilization - review assignments",
+                "action": "optimize"
+            })
+
+        # action 3: high cost savings opportunity  
+        if monthly_savings > 100:
+            actions.append({
+                "title": "Realize License Cost Savings",
+                "description": f"${monthly_savings}/month potential savings from license optimization",
+                "action": "optimize"
+            })
+
+        # action 4: license portfolio consolidation (only for smaller deployments)
+        if total_license_types > 5 and total_assignments < 50:
+            actions.append({
+                "title": "Consolidate License Types",
+                "description": f"{total_license_types} license types for small user base - consider consolidation",
+                "action": "optimize"
+            })
+
+        # build response structure
+        response_data = {
+            "success": True,
+            "data": [],  # empty for metadata endpoints
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "timestamp": datetime.now().isoformat(),
+                "total_license_types": total_license_types,
+                "total_license_assignments": total_assignments,
+                "active_license_assignments": active_assignments,
+                "monthly_license_cost": monthly_cost,
+                "license_utilization_rate": utilization_rate,
+                "underutilized_licenses": license_optimization.get("underutilized_licenses", 0),
+                "estimated_monthly_savings": monthly_savings
+            },
+            "actions": actions[:4]  # limit to maximum 4 actions
+        }
+        
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        error_msg = f"Error retrieving license data: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
+
+@app.route(route="tenant/roles", methods=["GET"])
+def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single tenant roles data"""
+    # Returns structured response with role optimization actions only
+    
+    try:
+        # extract & validate tenant id
+        tenant_id = req.params.get('tenant_id')
+        logging.info(f"Roles API request for tenant: {tenant_id}")
+        
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id parameter is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        logging.info(f"Processing roles data for tenant: {tenant_name}")
+
+        # grab roles data
+        # total unique roles
+        total_roles_query = "SELECT COUNT(DISTINCT role_id) as count FROM roles WHERE tenant_id = ?"
+        total_roles_result = query(total_roles_query, (tenant_id,))
+        
+        # total role assignments
+        total_assignments_query = "SELECT COUNT(*) as count FROM user_roles WHERE tenant_id = ?"
+        total_assignments_result = query(total_assignments_query, (tenant_id,))
+        
+        # unique users with role assignments
+        users_with_roles_query = "SELECT COUNT(DISTINCT user_id) as count FROM user_roles WHERE tenant_id = ?"
+        users_with_roles_result = query(users_with_roles_query, (tenant_id,))
+        
+        # Admin roles (roles containing 'Admin' or 'Administrator')
+        admin_roles_query = "SELECT COUNT(DISTINCT role_id) as count FROM roles WHERE tenant_id = ? AND (role_display_name LIKE '%Admin%' OR role_display_name LIKE '%Administrator%')"
+        admin_roles_result = query(admin_roles_query, (tenant_id,))
+        
+        # Users with multiple roles (potential over-privileged)
+        multi_role_users_query = "SELECT COUNT(*) as count FROM (SELECT user_id FROM user_roles WHERE tenant_id = ? GROUP BY user_id HAVING COUNT(role_id) > 1)"
+        multi_role_users_result = query(multi_role_users_query, (tenant_id,))
+
+        # calculate metrics
+        total_roles = total_roles_result[0]["count"] if total_roles_result else 0
+        total_assignments = total_assignments_result[0]["count"] if total_assignments_result else 0
+        users_with_roles = users_with_roles_result[0]["count"] if users_with_roles_result else 0
+        admin_roles = admin_roles_result[0]["count"] if admin_roles_result else 0
+        multi_role_users = multi_role_users_result[0]["count"] if multi_role_users_result else 0
+        
+        avg_roles_per_user = round(total_assignments / users_with_roles, 1) if users_with_roles > 0 else 0
+
+        # generate role-specific optimization actions
+        actions = []
+        
+        # action 1: review over-privileged users
+        if multi_role_users > 0:
+            actions.append({
+                "title": "Review Over-Privileged Users",
+                "description": f"{multi_role_users} users have multiple roles - verify necessity",
+                "action": "review"
+            })
+
+        # action 2: admin role assignments audit
+        if admin_roles > 0 and users_with_roles > 0:
+            actions.append({
+                "title": "Audit Admin Role Assignments",
+                "description": f"{admin_roles} admin roles assigned - ensure principle of least privilege",
+                "action": "audit"
+            })
+
+        # action 3: role proliferation (optional, only if many roles)
+        if total_roles > 10 and users_with_roles < 20:
+            actions.append({
+                "title": "Consolidate Role Definitions",
+                "description": f"{total_roles} roles for {users_with_roles} users - consider role consolidation",
+                "action": "optimize"
+            })
+
+        # build response structure
+        response_data = {
+            "success": True,
+            "data": [],  # empty for metadata endpoints
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "timestamp": datetime.now().isoformat(),
+                "total_roles": total_roles,
+                "total_role_assignments": total_assignments,
+                "users_with_roles": users_with_roles,
+                "admin_roles": admin_roles,
+                "multi_role_users": multi_role_users,
+                "avg_roles_per_user": avg_roles_per_user
+            },
+            "actions": actions[:3]  # limit to maximum 3 actions (roles tend to have fewer optimization opportunities)
+        }
+        
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        error_msg = f"Error retrieving roles data: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
+
+
+@app.route(route="users/{user_id}/disable", methods=["PATCH"])
+def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP PATCH endpoint to disable a single inactive user account"""
+    # single tenant, single resource operation
+
+    try:
+        # extract and validate request data
+        logging.info("Processing user disable request")
+        
+        req_body = req.get_json()
+        if not req_body:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "Request body is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # get tenant_id and user identifier from request
+        tenant_id = req_body.get('tenant_id')
+        user_id = req_body.get('user_id')
+        user_principal_name = req_body.get('user_principal_name')
+        
+        # validate required parameters
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+        
+        if not user_id and not user_principal_name:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "Either user_id or user_principal_name is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        logging.info(f"Disabling user for tenant: {tenant_name}")
+
+        # find and validate user exists in database
+        if user_id:
+            # query by user_id
+            user_query = "SELECT * FROM users WHERE tenant_id = ? AND id = ?"
+            user_result = query(user_query, (tenant_id, user_id))
+            identifier = f"user_id: {user_id}"
+        else:
+            # query by user_principal_name
+            user_query = "SELECT * FROM users WHERE tenant_id = ? AND user_principal_name = ?"
+            user_result = query(user_query, (tenant_id, user_principal_name))
+            identifier = f"user_principal_name: {user_principal_name}"
+        
+        if not user_result:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"User not found ({identifier})"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        user = user_result[0]
+        logging.info(f"Found user: {user['user_principal_name']}")
+
+        # check if user is already disabled
+        if not user.get('account_enabled', True):
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"User {user['user_principal_name']} is already disabled",
+                    "data": {
+                        "user_id": user['id'],
+                        "user_principal_name": user['user_principal_name'],
+                        "account_enabled": False
+                    }
+                }),
+                status_code=409,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if user is actually inactive (business rule validation)        
+        last_sign_in = user.get('last_sign_in')
+        inactivity_threshold_days = 90
+        
+        if last_sign_in:
+            try:
+                # parse last sign-in date
+                last_sign_in_date = datetime.fromisoformat(last_sign_in.replace('Z', '+00:00'))
+                days_since_last_signin = (datetime.now() - last_sign_in_date.replace(tzinfo=None)).days
+                
+                if days_since_last_signin < inactivity_threshold_days:
+                    return func.HttpResponse(
+                        json.dumps({
+                            "success": False,
+                            "error": f"User {user['user_principal_name']} is not inactive (last sign-in: {days_since_last_signin} days ago, threshold: {inactivity_threshold_days} days)",
+                            "data": {
+                                "user_id": user['id'],
+                                "user_principal_name": user['user_principal_name'],
+                                "last_sign_in": last_sign_in,
+                                "days_since_last_signin": days_since_last_signin,
+                                "inactivity_threshold_days": inactivity_threshold_days
+                            }
+                        }),
+                        status_code=422,
+                        headers={"Content-Type": "application/json"}
+                    )
+            except Exception as date_parse_error:
+                logging.warning(f"Could not parse last_sign_in date: {last_sign_in}, proceeding with disable")
+
+        # disable user account via graph api
+        logging.info(f"Disabling user {user['user_principal_name']} via Graph API")
+        graph_client = GraphClient(tenant_id)
+        
+        # call Microsoft Graph to disable the user
+        disable_result = graph_client.disable_user(user['id'])
+        
+        if disable_result.get('status') != 'success':
+            error_msg = disable_result.get('error', 'Unknown error disabling user')
+            logging.error(f"Failed to disable user via Graph API: {error_msg}")
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to disable user: {error_msg}",
+                    "data": {
+                        "user_id": user['id'],
+                        "user_principal_name": user['user_principal_name'],
+                        "graph_api_error": error_msg
+                    }
+                }),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # update local database to reflect disabled status
+        current_time = datetime.now().isoformat()
+        update_query = "UPDATE users SET account_enabled = 0, synced_at = ? WHERE tenant_id = ? AND id = ?"
+        
+        try:
+            query(update_query, (current_time, tenant_id, user['id']))
+            logging.info(f"Updated local database for user {user['user_principal_name']}")
+        except Exception as db_error:
+            logging.error(f"Failed to update local database: {str(db_error)}")
+            # note: user is disabled in Graph but local DB might be out of sync
+
+        # return success response
+        response_data = {
+            "success": True,
+            "message": f"User {user['user_principal_name']} successfully disabled",
+            "data": {
+                "user_id": user['id'],
+                "user_principal_name": user['user_principal_name'],
+                "display_name": user.get('display_name'),
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "disabled_at": current_time,
+                "was_inactive_since": last_sign_in,
+                "days_inactive": (datetime.now() - datetime.fromisoformat(last_sign_in.replace('Z', '+00:00')).replace(tzinfo=None)).days if last_sign_in else "Never signed in"
+            }
+        }
+        
+        logging.info(f"Successfully disabled user {user['user_principal_name']}")
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        # comprehensive error handling and logging
+        error_msg = f"Error disabling user: {str(e)}"
+        logging.error(error_msg)
+        
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg,
+                "data": {
+                    "tenant_id": req_body.get('tenant_id') if 'req_body' in locals() else None,
+                    "user_id": req_body.get('user_id') if 'req_body' in locals() else None,
+                    "user_principal_name": req_body.get('user_principal_name') if 'req_body' in locals() else None
+                }
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
+
+@app.route(route="tenant/users/disable-all", methods=["PATCH"])
+def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP PATCH endpoint to disable ALL inactive users for a tenant"""
+    # single tenant, multiple resource operation
+        
+    try:
+        # extract and validate request data
+        logging.info("Processing bulk user disable request")
+        
+        req_body = req.get_json()
+        if not req_body:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "Request body is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # get parameters from request
+        tenant_id = req_body.get('tenant_id')
+        inactivity_threshold_days = req_body.get('inactivity_threshold_days', 90)
+        dry_run = req_body.get('dry_run', False)
+        
+        # validate required parameters
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        execution_time = datetime.now().isoformat()
+        logging.info(f"Processing bulk disable for tenant: {tenant_name} (dry_run: {dry_run})")
+
+        # use existing analysis function to get potential savings
+        inactive_analysis = calculate_inactive_users(tenant_id, inactivity_threshold_days)
+        potential_savings = inactive_analysis.get('potential_monthly_savings', 0)
+
+        # get all active users to process
+        inactive_users_query = """
+        SELECT id, display_name, user_principal_name, last_sign_in, account_enabled
+        FROM users 
+        WHERE tenant_id = ? AND account_enabled = 1
+        """
+        all_users = query(inactive_users_query, (tenant_id,))
+        
+        # filter to get actual inactive users based on threshold
+        cutoff_date = datetime.now() - timedelta(days=inactivity_threshold_days)
+        
+        inactive_users = []
+        for user in all_users:
+            if user['last_sign_in']:
+                try:
+                    last_sign_in_date = datetime.fromisoformat(user['last_sign_in'].replace('Z', '+00:00'))
+                    days_inactive = (datetime.now() - last_sign_in_date.replace(tzinfo=None)).days
+                    if last_sign_in_date.replace(tzinfo=None) < cutoff_date:
+                        user['days_inactive'] = days_inactive
+                        inactive_users.append(user)
+                except:
+                    # if date parsing fails, treat as inactive
+                    user['days_inactive'] = None
+                    inactive_users.append(user)
+            else:
+                # never signed in - treat as inactive
+                user['days_inactive'] = None
+                inactive_users.append(user)
+
+        if not inactive_users:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": True,
+                    "data": [],
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "tenant_name": tenant_name,
+                        "operation": "bulk_disable_inactive_users",
+                        "dry_run": dry_run,
+                        "inactivity_threshold_days": inactivity_threshold_days,
+                        "execution_time": execution_time,
+                        "summary": {
+                            "total_identified": 0,
+                            "successfully_disabled": 0,
+                            "already_disabled": 0,
+                            "failed": 0,
+                            "skipped": 0
+                        },
+                        "potential_monthly_savings": potential_savings
+                    },
+                    "actions": []
+                }),
+                status_code=200,
+                headers={"Content-Type": "application/json"}
+            )
+
+        logging.info(f"Found {len(inactive_users)} inactive users to process")
+
+        # initialize tracking variables
+        processed_users = []
+        counters = {
+            "successfully_disabled": 0,
+            "already_disabled": 0,
+            "failed": 0,
+            "skipped": 0
+        }
+        
+        # initialize Graph client (only if not dry run)
+        if not dry_run:
+            from core.graph_client import GraphClient
+            graph_client = GraphClient(tenant_id)
+        
+        # process each inactive user
+        for user in inactive_users:
+            user_id = user['id']
+            user_principal_name = user['user_principal_name']
+            display_name = user.get('display_name')
+            last_sign_in = user.get('last_sign_in')
+            days_inactive = user.get('days_inactive')
+            
+            user_data = {
+                "user_id": user_id,
+                "user_principal_name": user_principal_name,
+                "display_name": display_name,
+                "last_sign_in": last_sign_in,
+                "days_inactive": days_inactive
+            }
+            
+            try:
+                # check if user is already disabled (shouldn't happen with our query, but safety check)
+                if not user.get('account_enabled', True):
+                    user_data["status"] = "already_disabled"
+                    counters["already_disabled"] += 1
+                    processed_users.append(user_data)
+                    continue
+
+                if dry_run:
+                    # dry run mode - just simulate
+                    user_data["status"] = "would_be_disabled"
+                    user_data["note"] = "Dry run - no actual changes made"
+                    counters["successfully_disabled"] += 1
+                    processed_users.append(user_data)
+                    logging.info(f"DRY RUN: Would disable user {user_principal_name}")
+                else:
+                    # actually disable the user via Graph API
+                    logging.info(f"Disabling user {user_principal_name} via Graph API")
+                    disable_result = graph_client.disable_user(user_id)
+                    
+                    if disable_result.get('status') != 'success':
+                        error_msg = disable_result.get('error', 'Unknown error disabling user')
+                        user_data["status"] = "failed"
+                        user_data["error"] = error_msg
+                        counters["failed"] += 1
+                        processed_users.append(user_data)
+                        logging.error(f"Failed to disable {user_principal_name}: {error_msg}")
+                        continue
+
+                    # update local database to reflect disabled status
+                    current_time = datetime.now().isoformat()
+                    update_query = "UPDATE users SET account_enabled = 0, synced_at = ? WHERE tenant_id = ? AND id = ?"
+                    
+                    try:
+                        query(update_query, (current_time, tenant_id, user_id))
+                        logging.info(f"Updated local database for user {user_principal_name}")
+                    except Exception as db_error:
+                        logging.warning(f"Graph API disable succeeded but local DB update failed for {user_principal_name}: {str(db_error)}")
+                        # note: user is disabled in Graph but local DB might be out of sync
+
+                    user_data["status"] = "disabled"
+                    user_data["disabled_at"] = current_time
+                    counters["successfully_disabled"] += 1
+                    processed_users.append(user_data)
+                    logging.info(f"Successfully disabled user {user_principal_name}")
+                    
+            except Exception as e:
+                error_msg = f"Error processing user {user_principal_name}: {str(e)}"
+                user_data["status"] = "failed"
+                user_data["error"] = error_msg
+                counters["failed"] += 1
+                processed_users.append(user_data)
+                logging.error(error_msg)
+
+        # build actions array based on results
+        actions = []
+        
+        if counters["failed"] > 0:
+            actions.append({
+                "type": "review_failures",
+                "description": f"{counters['failed']} user(s) failed to disable - review permissions",
+                "users_affected": counters["failed"]
+            })
+        
+        if counters["successfully_disabled"] > 0 and potential_savings > 0:
+            actions.append({
+                "type": "verify_savings",
+                "description": f"Potential monthly savings of ${potential_savings:.2f} achieved",
+                "amount": potential_savings
+            })
+        
+        if counters["already_disabled"] > 0:
+            actions.append({
+                "type": "review_already_disabled",
+                "description": f"{counters['already_disabled']} user(s) were already disabled",
+                "users_affected": counters["already_disabled"]
+            })
+
+        # determine overall success status
+        success_status = counters["failed"] == 0
+        status_code = 200 if success_status else 207  # 207 = Multi-Status (partial success)
+        
+        # build final response in your standard format
+        response_data = {
+            "success": success_status,
+            "data": processed_users,
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "operation": "bulk_disable_inactive_users",
+                "dry_run": dry_run,
+                "inactivity_threshold_days": inactivity_threshold_days,
+                "execution_time": execution_time,
+                "summary": {
+                    "total_identified": len(inactive_users),
+                    "successfully_disabled": counters["successfully_disabled"],
+                    "already_disabled": counters["already_disabled"],
+                    "failed": counters["failed"],
+                    "skipped": counters["skipped"]
+                },
+                "potential_monthly_savings": potential_savings
+            },
+            "actions": actions
+        }
+        
+        logging.info(f"Bulk disable operation completed: {counters}")
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=status_code,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        error_msg = f"Error in bulk disable operation: {str(e)}"
+        logging.error(error_msg)
+        
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg,
+                "data": [],
+                "metadata": {
+                    "tenant_id": req_body.get('tenant_id') if 'req_body' in locals() else None,
+                    "operation": "bulk_disable_inactive_users",
+                    "execution_time": datetime.now().isoformat()
+                },
+                "actions": []
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
+@app.route(route="users/{user_id}/reset-password", methods=["POST"])
+def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
+    """POST endpoint to reset a user's password with temporary password"""
+    # single tenant, single resource operation
+    
+    from datetime import datetime
+    
+    try:
+        # extract user_id from URL path
+        user_id = req.route_params.get('user_id')
+        
+        # extract and validate request data
+        logging.info(f"Processing password reset request for user {user_id}")
+        
+        req_body = req.get_json()
+        if not req_body:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "Request body is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # get parameters from request
+        tenant_id = req_body.get('tenant_id')
+        
+        # validate required parameters
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+            
+        if not user_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "user_id is required in URL path"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        execution_time = datetime.now().isoformat()
+        logging.info(f"Resetting password for user {user_id} in tenant: {tenant_name}")
+
+        # find and validate user exists in database
+        user_query = "SELECT * FROM users WHERE tenant_id = ? AND id = ?"
+        user_result = query(user_query, (tenant_id, user_id))
+        
+        if not user_result:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"User {user_id} not found in tenant {tenant_id}"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        user = user_result[0]
+        logging.info(f"Found user: {user['user_principal_name']}")
+
+        # check if user is disabled
+        if not user.get('account_enabled', True):
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Cannot reset password for disabled user {user['user_principal_name']}",
+                    "data": [{
+                        "user_id": user['id'],
+                        "user_principal_name": user['user_principal_name'],
+                        "status": "user_disabled"
+                    }],
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "tenant_name": tenant_name,
+                        "operation": "reset_user_password",
+                        "execution_time": execution_time
+                    },
+                    "actions": []
+                }),
+                status_code=422,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # reset password via Graph API
+        logging.info(f"Resetting password for user {user['user_principal_name']} via Graph API")
+        from core.graph_client import GraphClient
+        graph_client = GraphClient(tenant_id)
+        
+        reset_result = graph_client.reset_user_password(user['id'])
+        
+        if reset_result.get('status') != 'success':
+            error_msg = reset_result.get('error', 'Unknown error resetting password')
+            logging.error(f"Failed to reset password via Graph API: {error_msg}")
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to reset password: {error_msg}",
+                    "data": [{
+                        "user_id": user['id'],
+                        "user_principal_name": user['user_principal_name'],
+                        "status": "failed",
+                        "error": error_msg
+                    }],
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "tenant_name": tenant_name,
+                        "operation": "reset_user_password",
+                        "execution_time": execution_time,
+                        "summary": {
+                            "passwords_reset": 0,
+                            "failed": 1
+                        }
+                    },
+                    "actions": [{
+                        "type": "review_permissions",
+                        "description": "Review Graph API permissions for password reset",
+                        "users_affected": 1
+                    }]
+                }),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # update local database to track password reset
+        current_time = datetime.now().isoformat()
+        update_query = "UPDATE users SET synced_at = ? WHERE tenant_id = ? AND id = ?"
+        
+        try:
+            query(update_query, (current_time, tenant_id, user['id']))
+            logging.info(f"Updated local database for user {user['user_principal_name']}")
+        except Exception as db_error:
+            logging.warning(f"Graph API reset succeeded but local DB update failed for {user['user_principal_name']}: {str(db_error)}")
+
+        # prepare response data
+        user_data = {
+            "user_id": user['id'],
+            "user_principal_name": user['user_principal_name'],
+            "display_name": user.get('display_name'),
+            "status": "password_reset",
+            "reset_at": current_time,
+            "temporary_password": reset_result['temporary_password'],
+            "force_change_password": True
+        }
+
+        # build actions
+        actions = [
+            {
+                "type": "secure_delivery",
+                "description": "Securely deliver temporary password to user",
+                "users_affected": 1
+            },
+            {
+                "type": "monitor_login",
+                "description": "Monitor user's next login to confirm password change",
+                "users_affected": 1
+            }
+        ]
+
+        # build final response
+        response_data = {
+            "success": True,
+            "data": [user_data],
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "operation": "reset_user_password",
+                "execution_time": execution_time,
+                "summary": {
+                    "passwords_reset": 1,
+                    "failed": 0
+                }
+            },
+            "actions": actions
+        }
+        
+        logging.info(f"Successfully reset password for user {user['user_principal_name']}")
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        error_msg = f"Error in password reset operation: {str(e)}"
+        logging.error(error_msg)
+        
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg,
+                "data": [],
+                "metadata": {
+                    "tenant_id": req_body.get('tenant_id') if 'req_body' in locals() else None,
+                    "operation": "reset_user_password",
+                    "execution_time": datetime.now().isoformat()
+                },
+                "actions": []
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
 # REPORT GENERATION
 
 
@@ -704,7 +1831,6 @@ def service_principal_analytics_http(req: func.HttpRequest) -> func.HttpResponse
     except Exception as e:
         logging.error(f"Service principal analytics HTTP failed: {str(e)}")
         error_result = {"status": "error", "error": str(e)}
-        import json
 
         return func.HttpResponse(
             json.dumps(error_result, indent=2),

@@ -3,10 +3,13 @@ import azure.functions as func
 from core.graph_client import GraphClient
 from core.tenant_manager import get_tenants
 from core.graph_client import GraphClient
-from sync.user_sync import sync_users
+# from sync.user_sync import sync_users
+from sync.user_syncV2 import sync_users as sync_users_v2
 from sync.service_principal_sync import sync_service_principals
-from sync.license_sync import sync_licenses
-from sync.role_sync import sync_roles_for_tenants
+# from sync.license_sync import sync_licenses
+from sync.license_syncV2 import sync_licenses as sync_licenses_v2
+# from sync.role_sync import sync_roles_for_tenants
+from sync.role_syncV2 import sync_roles_for_tenants as sync_roles_for_tenants_v2
 from core.error_reporting import categorize_sync_errors, aggregate_recent_sync_errors
 from sync.policy_sync import sync_conditional_access_policies
 from analysis.user_analysis import (
@@ -15,7 +18,7 @@ from analysis.user_analysis import (
     calculate_license_optimization,
 )
 from datetime import datetime, timedelta
-from core.database import query
+from core.databaseV2 import query
 import json
 import re
 # from sync.hibp_sync import sync_hibp_breaches
@@ -45,12 +48,75 @@ def log_error_summary(error_counts, sync_type):
 # TIMER TRIGGERS (Scheduled Functions)
 
 
+# @app.schedule(
+#     schedule="0 0 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False
+# )
+# def users_sync(timer: func.TimerRequest) -> None:
+#     if timer.past_due:
+#         logging.warning("User sync timer is past due!")
+
+#     tenants = get_tenants()
+#     tenants.reverse()  # Process in reverse order
+#     results = []
+
+#     for tenant in tenants:
+#         try:
+#             result = sync_users(tenant["tenant_id"], tenant["name"])
+#             if result["status"] == "success":
+#                 logging.info(
+#                     f"✓ {tenant['name']}: {result['users_synced']} users synced"
+#                 )
+#                 results.append(
+#                     {
+#                         "status": "completed",
+#                         "tenant_id": tenant["tenant_id"],
+#                         "users_synced": result["users_synced"],
+#                     }
+#                 )
+
+#                 # Run analysis after successful sync
+#                 try:
+#                     inactive_result = calculate_inactive_users(tenant["tenant_id"])
+#                     logging.info(
+#                         f"  Inactive users: {inactive_result.get('inactive_count', 0)}"
+#                     )
+
+#                     mfa_result = calculate_mfa_compliance(tenant["tenant_id"])
+#                     logging.info(
+#                         f"  MFA compliance: {mfa_result.get('compliance_rate', 0)}%"
+#                     )
+
+#                 except Exception as e:
+#                     logging.error(f"Analysis error: {str(e)}")
+
+#             else:
+#                 logging.error(f"✗ {tenant['name']}: {result['error']}")
+#                 results.append(
+#                     {
+#                         "status": "error",
+#                         "tenant_id": tenant["tenant_id"],
+#                         "error": result.get("error", "Unknown error"),
+#                     }
+#                 )
+#         except Exception as e:
+#             logging.error(f"✗ {tenant['name']}: {str(e)}")
+#             results.append(
+#                 {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
+#             )
+
+#     # Use centralized error reporting
+#     failed_count = len([r for r in results if r["status"] == "error"])
+#     if failed_count > 0:
+#         categorize_sync_errors(results, "User")
+
+
 @app.schedule(
     schedule="0 0 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False
 )
-def users_sync(timer: func.TimerRequest) -> None:
+def users_syncV2(timer: func.TimerRequest) -> None:
+    """V2 User sync using new database schema"""
     if timer.past_due:
-        logging.warning("User sync timer is past due!")
+        logging.warning("User sync V2 timer is past due!")
 
     tenants = get_tenants()
     tenants.reverse()  # Process in reverse order
@@ -58,16 +124,17 @@ def users_sync(timer: func.TimerRequest) -> None:
 
     for tenant in tenants:
         try:
-            result = sync_users(tenant["tenant_id"], tenant["name"])
+            result = sync_users_v2(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
                 logging.info(
-                    f"✓ {tenant['name']}: {result['users_synced']} users synced"
+                    f"✓ V2 {tenant['name']}: {result['users_synced']} users synced"
                 )
                 results.append(
                     {
                         "status": "completed",
                         "tenant_id": tenant["tenant_id"],
                         "users_synced": result["users_synced"],
+                        "user_licenses_synced": result.get("user_licenses_synced", 0),
                     }
                 )
 
@@ -87,7 +154,7 @@ def users_sync(timer: func.TimerRequest) -> None:
                     logging.error(f"Analysis error: {str(e)}")
 
             else:
-                logging.error(f"✗ {tenant['name']}: {result['error']}")
+                logging.error(f"✗ V2 {tenant['name']}: {result['error']}")
                 results.append(
                     {
                         "status": "error",
@@ -96,7 +163,7 @@ def users_sync(timer: func.TimerRequest) -> None:
                     }
                 )
         except Exception as e:
-            logging.error(f"✗ {tenant['name']}: {str(e)}")
+            logging.error(f"✗ V2 {tenant['name']}: {str(e)}")
             results.append(
                 {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
             )
@@ -104,35 +171,82 @@ def users_sync(timer: func.TimerRequest) -> None:
     # Use centralized error reporting
     failed_count = len([r for r in results if r["status"] == "error"])
     if failed_count > 0:
-        categorize_sync_errors(results, "User")
+        categorize_sync_errors(results, "User V2")
+
+
+# @app.schedule(
+#     schedule="0 30 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False
+# )
+# def licenses_sync(timer: func.TimerRequest) -> None:
+#     if timer.past_due:
+#         logging.warning("License sync timer is past due!")
+
+#     tenants = get_tenants()
+#     results = []
+
+#     for tenant in tenants:
+#         try:
+#             result = sync_licenses(tenant["tenant_id"], tenant["name"])
+#             if result["status"] == "success":
+#                 logging.info(
+#                     f"✓ {tenant['name']}: {result['licenses_synced']} licenses synced"
+#                 )
+#                 results.append(
+#                     {
+#                         "status": "completed",
+#                         "tenant_id": tenant["tenant_id"],
+#                         "licenses_synced": result["licenses_synced"],
+#                     }
+#                 )
+#             else:
+#                 logging.error(f"✗ {tenant['name']}: {result['error']}")
+#                 results.append(
+#                     {
+#                         "status": "error",
+#                         "tenant_id": tenant["tenant_id"],
+#                         "error": result.get("error", "Unknown error"),
+#                     }
+#                 )
+#         except Exception as e:
+#             logging.error(f"✗ {tenant['name']}: {str(e)}")
+#             results.append(
+#                 {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
+#             )
+
+#     failed_count = len([r for r in results if r["status"] == "error"])
+#     if failed_count > 0:
+#         categorize_sync_errors(results, "License")
 
 
 @app.schedule(
     schedule="0 30 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False
 )
-def licenses_sync(timer: func.TimerRequest) -> None:
+def licenses_syncV2(timer: func.TimerRequest) -> None:
+    """V2 License sync using new database schema"""
     if timer.past_due:
-        logging.warning("License sync timer is past due!")
+        logging.warning("License sync V2 timer is past due!")
 
     tenants = get_tenants()
     results = []
 
     for tenant in tenants:
         try:
-            result = sync_licenses(tenant["tenant_id"], tenant["name"])
+            result = sync_licenses_v2(tenant["tenant_id"], tenant["name"])
             if result["status"] == "success":
                 logging.info(
-                    f"✓ {tenant['name']}: {result['licenses_synced']} licenses synced"
+                    f"✓ V2 {tenant['name']}: {result['licenses_synced']} licenses synced"
                 )
                 results.append(
                     {
                         "status": "completed",
                         "tenant_id": tenant["tenant_id"],
                         "licenses_synced": result["licenses_synced"],
+                        "user_licenses_synced": result.get("user_licenses_synced", 0),
+                        "inactive_licenses_updated": result.get("inactive_licenses_updated", 0),
                     }
                 )
             else:
-                logging.error(f"✗ {tenant['name']}: {result['error']}")
+                logging.error(f"✗ V2 {tenant['name']}: {result['error']}")
                 results.append(
                     {
                         "status": "error",
@@ -141,14 +255,14 @@ def licenses_sync(timer: func.TimerRequest) -> None:
                     }
                 )
         except Exception as e:
-            logging.error(f"✗ {tenant['name']}: {str(e)}")
+            logging.error(f"✗ V2 {tenant['name']}: {str(e)}")
             results.append(
                 {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
             )
 
     failed_count = len([r for r in results if r["status"] == "error"])
     if failed_count > 0:
-        categorize_sync_errors(results, "License")
+        categorize_sync_errors(results, "License V2")
 
 
 @app.schedule(
@@ -197,28 +311,52 @@ def applications_sync(timer: func.TimerRequest) -> None:
         categorize_sync_errors(results, "Service Principal")
 
 
+# @app.schedule(
+#     schedule="0 30 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False
+# )
+# def role_sync(timer: func.TimerRequest) -> None:
+#     """Timer trigger for role sync"""
+#     if timer.past_due:
+#         logging.info("Role sync timer is past due!")
+
+#     logging.info("Starting scheduled role sync")
+#     tenants = get_tenants()
+#     tenant_ids = [tenant["tenant_id"] for tenant in tenants]
+
+#     result = sync_roles_for_tenants(tenant_ids)
+
+#     if result["status"] == "completed":
+#         logging.info(
+#             f"  Role sync completed: {result['total_roles_synced']} roles, {result['total_role_assignments_synced']} role assignments across {result['successful_tenants']} tenants"
+#         )
+#         if result["failed_tenants"] > 0:
+#             categorize_sync_errors(result["results"], "Role")
+#     else:
+#         logging.error(f"  Role sync failed: {result.get('error', 'Unknown error')}")
+
+
 @app.schedule(
     schedule="0 30 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False
 )
-def role_sync(timer: func.TimerRequest) -> None:
-    """Timer trigger for role sync"""
+def role_syncV2(timer: func.TimerRequest) -> None:
+    """V2 Timer trigger for role sync using new database schema"""
     if timer.past_due:
-        logging.info("Role sync timer is past due!")
+        logging.info("Role sync V2 timer is past due!")
 
-    logging.info("Starting scheduled role sync")
+    logging.info("Starting scheduled role sync V2")
     tenants = get_tenants()
     tenant_ids = [tenant["tenant_id"] for tenant in tenants]
 
-    result = sync_roles_for_tenants(tenant_ids)
+    result = sync_roles_for_tenants_v2(tenant_ids)
 
     if result["status"] == "completed":
         logging.info(
-            f"  Role sync completed: {result['total_roles_synced']} roles, {result['total_role_assignments_synced']} role assignments across {result['successful_tenants']} tenants"
+            f"  V2 Role sync completed: {result['total_roles_synced']} roles, {result['total_role_assignments_synced']} role assignments across {result['successful_tenants']} tenants"
         )
         if result["failed_tenants"] > 0:
-            categorize_sync_errors(result["results"], "Role")
+            categorize_sync_errors(result["results"], "Role V2")
     else:
-        logging.error(f"  Role sync failed: {result.get('error', 'Unknown error')}")
+        logging.error(f"  V2 Role sync failed: {result.get('error', 'Unknown error')}")
 
 
 @app.schedule(
@@ -493,18 +631,18 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
 
         # grab user data
         # basic user counts
-        total_users_query = "SELECT COUNT(*) as count FROM users WHERE tenant_id = ?"
+        total_users_query = "SELECT COUNT(*) as count FROM usersV2 WHERE tenant_id = ?"
         total_users_result = query(total_users_query, (tenant_id,))
 
-        active_users_query = "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND account_enabled = 1"
+        active_users_query = "SELECT COUNT(*) as count FROM usersV2 WHERE tenant_id = ? AND account_enabled = 1"
         active_users_result = query(active_users_query, (tenant_id,))
 
         # admin users count
-        admin_users_query = "SELECT COUNT(DISTINCT user_id) as count FROM user_roles WHERE tenant_id = ?"
+        admin_users_query = "SELECT COUNT(DISTINCT user_id) as count FROM user_rolesV2 WHERE tenant_id = ?"
         admin_users_result = query(admin_users_query, (tenant_id,))
 
         # never signed in users
-        never_signed_in_query = "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND last_sign_in IS NULL AND account_enabled = 1"
+        never_signed_in_query = "SELECT COUNT(*) as count FROM usersV2 WHERE tenant_id = ? AND last_sign_in_date IS NULL AND account_enabled = 1"
         never_signed_in_result = query(never_signed_in_query, (tenant_id,))
 
         # grab analysis data
@@ -637,15 +775,15 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
         total_licenses_result = query(total_licenses_query, (tenant_id,))
 
         # total license assignments
-        total_assignments_query = "SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ?"
+        total_assignments_query = "SELECT COUNT(*) as count FROM user_licensesV2 WHERE tenant_id = ?"
         total_assignments_result = query(total_assignments_query, (tenant_id,))
 
         # active license assignments
-        active_assignments_query = "SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ? AND is_active = 1"
+        active_assignments_query = "SELECT COUNT(*) as count FROM user_licensesV2 WHERE tenant_id = ? AND is_active = 1"
         active_assignments_result = query(active_assignments_query, (tenant_id,))
 
         # total monthly cost for active licenses
-        total_cost_query = "SELECT SUM(monthly_cost) as total_cost FROM user_licenses WHERE tenant_id = ? AND is_active = 1"
+        total_cost_query = "SELECT SUM(monthly_cost) as total_cost FROM user_licensesV2 WHERE tenant_id = ? AND is_active = 1"
         total_cost_result = query(total_cost_query, (tenant_id,))
 
         # grab license optimization data
@@ -776,11 +914,11 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
         total_roles_result = query(total_roles_query, (tenant_id,))
 
         # total role assignments
-        total_assignments_query = "SELECT COUNT(*) as count FROM user_roles WHERE tenant_id = ?"
+        total_assignments_query = "SELECT COUNT(*) as count FROM user_rolesV2 WHERE tenant_id = ?"
         total_assignments_result = query(total_assignments_query, (tenant_id,))
 
         # unique users with role assignments
-        users_with_roles_query = "SELECT COUNT(DISTINCT user_id) as count FROM user_roles WHERE tenant_id = ?"
+        users_with_roles_query = "SELECT COUNT(DISTINCT user_id) as count FROM user_rolesV2 WHERE tenant_id = ?"
         users_with_roles_result = query(users_with_roles_query, (tenant_id,))
 
         # Admin roles (roles containing 'Admin' or 'Administrator')
@@ -788,7 +926,7 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
         admin_roles_result = query(admin_roles_query, (tenant_id,))
 
         # Users with multiple roles (potential over-privileged)
-        multi_role_users_query = "SELECT COUNT(*) as count FROM (SELECT user_id FROM user_roles WHERE tenant_id = ? GROUP BY user_id HAVING COUNT(role_id) > 1)"
+        multi_role_users_query = "SELECT COUNT(*) as count FROM (SELECT user_id FROM user_rolesV2 WHERE tenant_id = ? GROUP BY user_id HAVING COUNT(role_id) > 1)"
         multi_role_users_result = query(multi_role_users_query, (tenant_id,))
 
         # calculate metrics
@@ -931,12 +1069,12 @@ def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
         # find and validate user exists in database
         if user_id:
             # query by user_id
-            user_query = "SELECT * FROM users WHERE tenant_id = ? AND id = ?"
+            user_query = "SELECT * FROM usersV2 WHERE tenant_id = ? AND user_id = ?"
             user_result = query(user_query, (tenant_id, user_id))
             identifier = f"user_id: {user_id}"
         else:
             # query by user_principal_name
-            user_query = "SELECT * FROM users WHERE tenant_id = ? AND user_principal_name = ?"
+            user_query = "SELECT * FROM usersV2 WHERE tenant_id = ? AND user_principal_name = ?"
             user_result = query(user_query, (tenant_id, user_principal_name))
             identifier = f"user_principal_name: {user_principal_name}"
 
@@ -960,7 +1098,7 @@ def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
                     "success": False,
                     "error": f"User {user['user_principal_name']} is already disabled",
                     "data": {
-                        "user_id": user['id'],
+                        "user_id": user['user_id'],
                         "user_principal_name": user['user_principal_name'],
                         "account_enabled": False
                     }
@@ -970,7 +1108,7 @@ def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
             )
 
         # check if user is actually inactive (business rule validation)
-        last_sign_in = user.get('last_sign_in')
+        last_sign_in = user.get('last_sign_in_date')
         inactivity_threshold_days = 90
 
         if last_sign_in:
@@ -985,7 +1123,7 @@ def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
                             "success": False,
                             "error": f"User {user['user_principal_name']} is not inactive (last sign-in: {days_since_last_signin} days ago, threshold: {inactivity_threshold_days} days)",
                             "data": {
-                                "user_id": user['id'],
+                                "user_id": user['user_id'],
                                 "user_principal_name": user['user_principal_name'],
                                 "last_sign_in": last_sign_in,
                                 "days_since_last_signin": days_since_last_signin,
@@ -1003,7 +1141,7 @@ def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
         graph_client = GraphClient(tenant_id)
 
         # call Microsoft Graph to disable the user
-        disable_result = graph_client.disable_user(user['id'])
+        disable_result = graph_client.disable_user(user['user_id'])
 
         if disable_result.get('status') != 'success':
             error_msg = disable_result.get('error', 'Unknown error disabling user')
@@ -1013,7 +1151,7 @@ def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
                     "success": False,
                     "error": f"Failed to disable user: {error_msg}",
                     "data": {
-                        "user_id": user['id'],
+                        "user_id": user['user_id'],
                         "user_principal_name": user['user_principal_name'],
                         "graph_api_error": error_msg
                     }
@@ -1024,10 +1162,10 @@ def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
 
         # update local database to reflect disabled status
         current_time = datetime.now().isoformat()
-        update_query = "UPDATE users SET account_enabled = 0, synced_at = ? WHERE tenant_id = ? AND id = ?"
+        update_query = "UPDATE usersV2 SET account_enabled = 0, last_updated = ? WHERE tenant_id = ? AND user_id = ?"
 
         try:
-            query(update_query, (current_time, tenant_id, user['id']))
+            query(update_query, (current_time, tenant_id, user['user_id']))
             logging.info(f"Updated local database for user {user['user_principal_name']}")
         except Exception as db_error:
             logging.error(f"Failed to update local database: {str(db_error)}")
@@ -1038,7 +1176,7 @@ def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
             "success": True,
             "message": f"User {user['user_principal_name']} successfully disabled",
             "data": {
-                "user_id": user['id'],
+                "user_id": user['user_id'],
                 "user_principal_name": user['user_principal_name'],
                 "display_name": user.get('display_name'),
                 "tenant_id": tenant_id,
@@ -1136,8 +1274,8 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
 
         # get all active users to process
         inactive_users_query = """
-        SELECT id, display_name, user_principal_name, last_sign_in, account_enabled
-        FROM users
+        SELECT user_id, display_name, user_principal_name, last_sign_in_date, account_enabled
+        FROM usersV2
         WHERE tenant_id = ? AND account_enabled = 1
         """
         all_users = query(inactive_users_query, (tenant_id,))
@@ -1147,9 +1285,9 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
 
         inactive_users = []
         for user in all_users:
-            if user['last_sign_in']:
+            if user['last_sign_in_date']:
                 try:
-                    last_sign_in_date = datetime.fromisoformat(user['last_sign_in'].replace('Z', '+00:00'))
+                    last_sign_in_date = datetime.fromisoformat(user['last_sign_in_date'].replace('Z', '+00:00'))
                     days_inactive = (datetime.now() - last_sign_in_date.replace(tzinfo=None)).days
                     if last_sign_in_date.replace(tzinfo=None) < cutoff_date:
                         user['days_inactive'] = days_inactive
@@ -1208,10 +1346,10 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
 
         # process each inactive user
         for user in inactive_users:
-            user_id = user['id']
+            user_id = user['user_id']
             user_principal_name = user['user_principal_name']
             display_name = user.get('display_name')
-            last_sign_in = user.get('last_sign_in')
+            last_sign_in = user.get('last_sign_in_date')
             days_inactive = user.get('days_inactive')
 
             user_data = {
@@ -1253,7 +1391,7 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
 
                     # update local database to reflect disabled status
                     current_time = datetime.now().isoformat()
-                    update_query = "UPDATE users SET account_enabled = 0, synced_at = ? WHERE tenant_id = ? AND id = ?"
+                    update_query = "UPDATE usersV2 SET account_enabled = 0, last_updated = ? WHERE tenant_id = ? AND user_id = ?"
 
                     try:
                         query(update_query, (current_time, tenant_id, user_id))
@@ -1300,16 +1438,15 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
                 "users_affected": counters["already_disabled"]
             })
 
-        # determine overall success status
-        success_status = counters["successfully_disabled"] > 0
-        
         # determine HTTP status code
-        if counters["successfully_disabled"] == 0:
-            status_code = 500  # Complete failure - no users disabled
-        elif counters["failed"] == 0:
+        if counters["failed"] == 0 and counters["successfully_disabled"] > 0:
             status_code = 200  # Complete success - all users disabled
         else:
-            status_code = 207  # Partial success - some disabled, some failed
+            status_code = 207  # Multi-status - mixed results (including all permissions failures)
+        
+        # determine overall success status
+        # Operation completed successfully if it processed users and returned results
+        success_status = True  # Bulk operation completed successfully
 
         # build final response in your standard format
         response_data = {
@@ -1429,7 +1566,7 @@ def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
         logging.info(f"Resetting password for user {user_id} in tenant: {tenant_name}")
 
         # find and validate user exists in database
-        user_query = "SELECT * FROM users WHERE tenant_id = ? AND id = ?"
+        user_query = "SELECT * FROM usersV2 WHERE tenant_id = ? AND user_id = ?"
         user_result = query(user_query, (tenant_id, user_id))
 
         if not user_result:
@@ -1452,7 +1589,7 @@ def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
                     "success": False,
                     "error": f"Cannot reset password for disabled user {user['user_principal_name']}",
                     "data": [{
-                        "user_id": user['id'],
+                        "user_id": user['user_id'],
                         "user_principal_name": user['user_principal_name'],
                         "status": "user_disabled"
                     }],
@@ -1473,7 +1610,7 @@ def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
         from core.graph_client import GraphClient
         graph_client = GraphClient(tenant_id)
 
-        reset_result = graph_client.reset_user_password(user['id'])
+        reset_result = graph_client.reset_user_password(user['user_id'])
 
         if reset_result.get('status') != 'success':
             error_msg = reset_result.get('error', 'Unknown error resetting password')
@@ -1483,7 +1620,7 @@ def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
                     "success": False,
                     "error": f"Failed to reset password: {error_msg}",
                     "data": [{
-                        "user_id": user['id'],
+                        "user_id": user['user_id'],
                         "user_principal_name": user['user_principal_name'],
                         "status": "failed",
                         "error": error_msg
@@ -1510,17 +1647,17 @@ def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
 
         # update local database to track password reset
         current_time = datetime.now().isoformat()
-        update_query = "UPDATE users SET synced_at = ? WHERE tenant_id = ? AND id = ?"
+        update_query = "UPDATE usersV2 SET last_updated = ? WHERE tenant_id = ? AND user_id = ?"
 
         try:
-            query(update_query, (current_time, tenant_id, user['id']))
+            query(update_query, (current_time, tenant_id, user['user_id']))
             logging.info(f"Updated local database for user {user['user_principal_name']}")
         except Exception as db_error:
             logging.warning(f"Graph API reset succeeded but local DB update failed for {user['user_principal_name']}: {str(db_error)}")
 
         # prepare response data
         user_data = {
-            "user_id": user['id'],
+            "user_id": user['user_id'],
             "user_principal_name": user['user_principal_name'],
             "display_name": user.get('display_name'),
             "status": "password_reset",
@@ -1634,11 +1771,11 @@ def generate_user_report(timer: func.TimerRequest) -> None:
 
                 # Get basic metrics
                 total_users_result = query(
-                    "SELECT COUNT(*) as count FROM users WHERE tenant_id = ?",
+                    "SELECT COUNT(*) as count FROM usersV2 WHERE tenant_id = ?",
                     (tenant_id,),
                 )
                 active_users_result = query(
-                    "SELECT COUNT(*) as count FROM users WHERE tenant_id = ? AND account_enabled = 1",
+                    "SELECT COUNT(*) as count FROM usersV2 WHERE tenant_id = ? AND account_enabled = 1",
                     (tenant_id,),
                 )
 

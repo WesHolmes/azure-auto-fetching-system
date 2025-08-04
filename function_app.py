@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from core.database import query
 import json
 import re
-from sync.hibp_sync import sync_hibp_breaches
+# from sync.hibp_sync import sync_hibp_breaches
 
 app = func.FunctionApp()
 
@@ -1301,8 +1301,15 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
             })
 
         # determine overall success status
-        success_status = counters["failed"] == 0
-        status_code = 200 if success_status else 207  # 207 = Multi-Status (partial success)
+        success_status = counters["successfully_disabled"] > 0
+        
+        # determine HTTP status code
+        if counters["successfully_disabled"] == 0:
+            status_code = 500  # Complete failure - no users disabled
+        elif counters["failed"] == 0:
+            status_code = 200  # Complete success - all users disabled
+        else:
+            status_code = 207  # Partial success - some disabled, some failed
 
         # build final response in your standard format
         response_data = {

@@ -145,7 +145,8 @@ def sync_licenses(tenant_id, tenant_name):
                     "warning_count": prepaid_units.get("warning", 0),
                     "suspended_count": prepaid_units.get("suspended", 0),
                     "monthly_cost": estimate_license_cost(sku_part_number),
-                    "last_update": datetime.now().isoformat(),
+                    "created_at": datetime.now().isoformat(),
+                    "last_updated": datetime.now().isoformat(),
                 }
                 license_records.append(license_data)
                 license_lookup[lic.get("skuId")] = license_data
@@ -254,6 +255,7 @@ def sync_licenses(tenant_id, tenant_name):
                         "license_display_name": get_sku_display_name(sku_part_number),
                         "license_partnumber": sku_part_number,
                         "monthly_cost": estimate_license_cost(sku_part_number),
+                        "created_at": datetime.now().isoformat(),
                         "last_updated": datetime.now().isoformat(),
                     }
                     user_license_records.append(user_license_record)

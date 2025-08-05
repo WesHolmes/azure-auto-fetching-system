@@ -88,6 +88,8 @@ def transform_role_data(roles, tenant_id):
                         "role_display_name": role.get("displayName"),
                         "role_description": role.get("description"),
                         "member_count": member_count,
+                        "created_at": datetime.utcnow().isoformat(),
+                        "last_updated": datetime.utcnow().isoformat(),
                     }
                     role_records.append(role_record)
 
@@ -100,6 +102,7 @@ def transform_role_data(roles, tenant_id):
                             "user_principal_name": member.get("userPrincipalName"),
                             "role_display_name": role.get("displayName"),
                             "role_description": role.get("description"),
+                            "created_at": datetime.utcnow().isoformat(),
                             "last_updated": datetime.utcnow().isoformat(),
                         }
                         user_role_records.append(user_role_record)

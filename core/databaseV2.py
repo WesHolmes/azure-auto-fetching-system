@@ -103,7 +103,8 @@ def init_schema():
                 warning_count INTEGER DEFAULT 0,
                 suspended_count INTEGER DEFAULT 0,
                 monthly_cost REAL DEFAULT 0,
-                last_update TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (tenant_id, license_id)
             )
         """
@@ -142,6 +143,7 @@ def init_schema():
                 is_active INTEGER NOT NULL DEFAULT 1,
                 unassigned_date TEXT, -- ISO datetime format
                 monthly_cost REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 last_updated TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (user_id, tenant_id, license_id)
             )
@@ -157,6 +159,8 @@ def init_schema():
                 role_display_name TEXT,
                 role_description TEXT,
                 member_count INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (tenant_id, role_id)
             )
         """
@@ -189,6 +193,7 @@ def init_schema():
                 user_principal_name TEXT(255) NOT NULL,
                 role_display_name TEXT(255) NOT NULL,
                 role_description TEXT(500),
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 last_updated TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (user_id, tenant_id, role_id)
             )

@@ -1004,8 +1004,8 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="users/{user_id}/disable", methods=["PATCH"])
-def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP PATCH endpoint to disable a single inactive user account"""
+def disable_user(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP PATCH endpoint to disable a single user account"""
     # single tenant, single resource operation
 
     try:
@@ -1107,35 +1107,6 @@ def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
                 headers={"Content-Type": "application/json"}
             )
 
-        # check if user is actually inactive (business rule validation)
-        last_sign_in = user.get('last_sign_in_date')
-        inactivity_threshold_days = 90
-
-        if last_sign_in:
-            try:
-                # parse last sign-in date
-                last_sign_in_date = datetime.fromisoformat(last_sign_in.replace('Z', '+00:00'))
-                days_since_last_signin = (datetime.now() - last_sign_in_date.replace(tzinfo=None)).days
-
-                if days_since_last_signin < inactivity_threshold_days:
-                    return func.HttpResponse(
-                        json.dumps({
-                            "success": False,
-                            "error": f"User {user['user_principal_name']} is not inactive (last sign-in: {days_since_last_signin} days ago, threshold: {inactivity_threshold_days} days)",
-                            "data": {
-                                "user_id": user['user_id'],
-                                "user_principal_name": user['user_principal_name'],
-                                "last_sign_in": last_sign_in,
-                                "days_since_last_signin": days_since_last_signin,
-                                "inactivity_threshold_days": inactivity_threshold_days
-                            }
-                        }),
-                        status_code=422,
-                        headers={"Content-Type": "application/json"}
-                    )
-            except Exception as date_parse_error:
-                logging.warning(f"Could not parse last_sign_in date: {last_sign_in}, proceeding with disable")
-
         # disable user account via graph api
         logging.info(f"Disabling user {user['user_principal_name']} via Graph API")
         graph_client = GraphClient(tenant_id)
@@ -1182,8 +1153,7 @@ def disable_inactive_user(req: func.HttpRequest) -> func.HttpResponse:
                 "tenant_id": tenant_id,
                 "tenant_name": tenant_name,
                 "disabled_at": current_time,
-                "was_inactive_since": last_sign_in,
-                "days_inactive": (datetime.now() - datetime.fromisoformat(last_sign_in.replace('Z', '+00:00')).replace(tzinfo=None)).days if last_sign_in else "Never signed in"
+                "last_sign_in": user.get('last_sign_in_date')
             }
         }
 

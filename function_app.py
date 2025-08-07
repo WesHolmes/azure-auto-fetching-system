@@ -2622,3 +2622,219 @@ def get_sps_report(req: func.HttpRequest) -> func.HttpResponse:
             status_code=500,
             mimetype="application/json"
         )
+
+
+@app.route(route="tenant/users/create", methods=["POST"])
+def create_user(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP POST endpoint to create a new user account"""
+    
+    try:
+        # Parse request body
+        try:
+            request_data = req.get_json()
+        except Exception as e:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Invalid JSON in request body: {str(e)}"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Extract and validate required fields
+        tenant_id = request_data.get("tenant_id")
+        user_data = request_data.get("user_data")
+
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        if not user_data:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "user_data is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Validate required user data fields
+        required_fields = ["displayName", "userPrincipalName", "passwordProfile"]
+        missing_fields = [field for field in required_fields if field not in user_data]
+        
+        if missing_fields:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Missing required fields in user_data: {', '.join(missing_fields)}"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Validate password profile
+        password_profile = user_data.get("passwordProfile", {})
+        if "password" not in password_profile:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "password is required in passwordProfile"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        execution_time = datetime.now().isoformat()
+        user_principal_name = user_data.get("userPrincipalName")
+        
+        logging.info(f"Creating user {user_principal_name} in tenant: {tenant_name}")
+
+        # Check if user already exists
+        existing_user_query = "SELECT user_id FROM usersV2 WHERE tenant_id = ? AND user_principal_name = ?"
+        existing_user_result = query(existing_user_query, (tenant_id, user_principal_name))
+
+        if existing_user_result:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"User {user_principal_name} already exists in tenant {tenant_id}",
+                    "data": {
+                        "user_principal_name": user_principal_name,
+                        "tenant_id": tenant_id,
+                        "tenant_name": tenant_name
+                    }
+                }),
+                status_code=409,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Create user via Graph API
+        logging.info(f"Creating user {user_principal_name} via Graph API")
+        from core.graph_client import GraphClient
+        graph_client = GraphClient(tenant_id)
+
+        create_result = graph_client.create_user(user_data)
+
+        if create_result.get('status') != 'success':
+            error_msg = create_result.get('error', 'Unknown error creating user')
+            logging.error(f"Failed to create user via Graph API: {error_msg}")
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to create user: {error_msg}",
+                    "data": {
+                        "user_principal_name": user_principal_name,
+                        "tenant_id": tenant_id,
+                        "tenant_name": tenant_name,
+                        "status": "failed",
+                        "error": error_msg
+                    },
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "tenant_name": tenant_name,
+                        "operation": "create_user",
+                        "execution_time": execution_time
+                    }
+                }),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Extract created user data
+        created_user_data = create_result.get('data', {})
+        user_id = created_user_data.get('id')
+        
+        # Prepare user record for database
+        user_record = {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "user_principal_name": created_user_data.get('userPrincipalName'),
+            "primary_email": created_user_data.get('mail') or created_user_data.get('userPrincipalName'),
+            "display_name": created_user_data.get('displayName'),
+            "department": created_user_data.get('department'),
+            "job_title": created_user_data.get('jobTitle'),
+            "account_type": created_user_data.get('userType'),
+            "account_enabled": 1 if created_user_data.get('accountEnabled', True) else 0,
+            "is_global_admin": 0,  # New users are not global admins by default
+            "is_mfa_compliant": 0,  # New users haven't set up MFA yet
+            "license_count": 0,  # New users have no licenses assigned
+            "group_count": 0,  # New users are not in any groups yet
+            "last_sign_in_date": None,  # New users haven't signed in yet
+            "last_password_change": None,  # New users haven't changed password yet
+            "created_date": datetime.now().isoformat(),
+            "last_updated": datetime.now().isoformat()
+        }
+
+        # Insert user into database
+        try:
+            upsert_many("usersV2", [user_record])
+            logging.info(f"Successfully added user {user_principal_name} to database")
+        except Exception as db_error:
+            logging.warning(f"Failed to add user to database: {str(db_error)}")
+            # Continue anyway as the user was created in Graph API
+
+        # Return success response
+        return func.HttpResponse(
+            json.dumps({
+                "success": True,
+                "message": f"User {user_principal_name} created successfully",
+                "data": {
+                    "user_id": user_id,
+                    "user_principal_name": user_principal_name,
+                    "display_name": created_user_data.get('displayName'),
+                    "tenant_id": tenant_id,
+                    "tenant_name": tenant_name,
+                    "account_enabled": created_user_data.get('accountEnabled', True),
+                    "created_at": execution_time
+                },
+                "metadata": {
+                    "tenant_id": tenant_id,
+                    "tenant_name": tenant_name,
+                    "operation": "create_user",
+                    "execution_time": execution_time
+                }
+            }),
+            status_code=201,
+            headers={"Content-Type": "application/json"}
+        )
+
+    except Exception as e:
+        error_msg = f"Unexpected error during create_user: {str(e)}"
+        logging.error(error_msg)
+        logging.exception("Full exception details:")
+
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg,
+                "metadata": {
+                    "operation": "create_user",
+                    "timestamp": datetime.now().isoformat()
+                }
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )

@@ -652,7 +652,7 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
         # calculate metrics
         total_users = total_users_result[0]["count"] if total_users_result else 0
         active_users = active_users_result[0]["count"] if active_users_result else 0
-        inactive_users = total_users - active_users
+        inactive_users = inactive_result.get('inactive_count', 0)  # Use correct inactive count from analysis
         admin_users = admin_users_result[0]["count"] if admin_users_result else 0
         never_signed_in = never_signed_in_result[0]["count"] if never_signed_in_result else 0
 

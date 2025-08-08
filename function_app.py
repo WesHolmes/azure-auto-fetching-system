@@ -2667,7 +2667,7 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
             )
 
         # Validate required user data fields
-        required_fields = ["displayName", "userPrincipalName", "passwordProfile"]
+        required_fields = ["displayName", "passwordProfile"]
         missing_fields = [field for field in required_fields if field not in user_data]
         
         if missing_fields:
@@ -2708,7 +2708,41 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
 
         tenant_name = tenant_names[tenant_id]
         execution_time = datetime.now().isoformat()
-        user_principal_name = user_data.get("userPrincipalName")
+        
+        # Extract first and last names from displayName
+        display_name = user_data.get("displayName", "")
+        first_name, last_name = "", ""
+        
+        # Try to split displayName into first and last names
+        name_parts = display_name.strip().split()
+        if len(name_parts) >= 2:
+            first_name = name_parts[0].lower()
+            last_name = name_parts[-1].lower()
+        elif len(name_parts) == 1:
+            first_name = name_parts[0].lower()
+            last_name = first_name
+        else:
+            # Fallback to a generic name if displayName is empty or invalid
+            first_name = "user"
+            last_name = "account"
+        
+        # Construct domain based on tenant name - use .onmicrosoft.com for Azure AD tenants
+        domain = f"{tenant_name}.onmicrosoft.com"
+        
+        # Construct userPrincipalName from first name, last name, and domain
+        user_principal_name = f"{first_name}{last_name}@{domain}"
+        
+        # Construct mailNickname from first and last name (required by Graph API)
+        mail_nickname = f"{first_name}{last_name}"
+        
+        # Update user_data with the constructed userPrincipalName and mailNickname
+        user_data["userPrincipalName"] = user_principal_name
+        user_data["mailNickname"] = mail_nickname
+        
+        # Remove unsupported fields that might be sent by the frontend
+        if "defaultGroups" in user_data:
+            logging.info(f"Removing unsupported 'defaultGroups' field: {user_data['defaultGroups']}")
+            del user_data["defaultGroups"]
         
         logging.info(f"Creating user {user_principal_name} in tenant: {tenant_name}")
 
@@ -2724,7 +2758,13 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
                     "data": {
                         "user_principal_name": user_principal_name,
                         "tenant_id": tenant_id,
-                        "tenant_name": tenant_name
+                        "tenant_name": tenant_name,
+                        "constructed_from": {
+                            "display_name": display_name,
+                            "first_name": first_name,
+                            "last_name": last_name,
+                            "domain": domain
+                        }
                     }
                 }),
                 status_code=409,
@@ -2733,8 +2773,8 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
 
         # Create user via Graph API
         logging.info(f"Creating user {user_principal_name} via Graph API")
-        from core.graph_client import GraphClient
-        graph_client = GraphClient(tenant_id)
+        from core.graph_beta_client import GraphBetaClient
+        graph_client = GraphBetaClient(tenant_id)
 
         create_result = graph_client.create_user(user_data)
 
@@ -2808,7 +2848,13 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
                     "tenant_id": tenant_id,
                     "tenant_name": tenant_name,
                     "account_enabled": created_user_data.get('accountEnabled', True),
-                    "created_at": execution_time
+                    "created_at": execution_time,
+                    "constructed_from": {
+                        "display_name": display_name,
+                        "first_name": first_name,
+                        "last_name": last_name,
+                        "domain": domain
+                    }
                 },
                 "metadata": {
                     "tenant_id": tenant_id,

@@ -399,43 +399,84 @@ def policies_sync(timer: func.TimerRequest) -> None:
 # HTTP TRIGGERS (Manual Endpoints)
 
 
-@app.route(route="sync/users", methods=["POST"])
-def user_sync_http(req: func.HttpRequest) -> func.HttpResponse:
-    tenants = get_tenants()
-    total = 0
-    results = []
+# @app.route(route="sync/users", methods=["POST"])
+# def user_sync_http(req: func.HttpRequest) -> func.HttpResponse:
+#     tenants = get_tenants()
+#     total = 0
+#     results = []
 
-    for tenant in tenants:
-        try:
-            result = sync_users(tenant["tenant_id"], tenant["name"])
-            if result["status"] == "success":
-                total += result["users_synced"]
-                results.append(
-                    {
-                        "status": "completed",
-                        "tenant_id": tenant["tenant_id"],
-                        "users_synced": result["users_synced"],
-                    }
-                )
-            else:
-                results.append(
-                    {
-                        "status": "error",
-                        "tenant_id": tenant["tenant_id"],
-                        "error": result.get("error", "Unknown error"),
-                    }
-                )
-        except Exception as e:
-            logging.error(f"Error syncing users for {tenant['name']}: {str(e)}")
-            results.append(
-                {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
-            )
+#     for tenant in tenants:
+#         try:
+#             result = sync_users(tenant["tenant_id"], tenant["name"])
+#             if result["status"] == "success":
+#                 total += result["users_synced"]
+#                 results.append(
+#                     {
+#                         "status": "completed",
+#                         "tenant_id": tenant["tenant_id"],
+#                         "users_synced": result["users_synced"],
+#                     }
+#                 )
+#             else:
+#                 results.append(
+#                     {
+#                         "status": "error",
+#                         "tenant_id": tenant["tenant_id"],
+#                         "error": result.get("error", "Unknown error"),
+#                     }
+#                 )
+#         except Exception as e:
+#             logging.error(f"Error syncing users for {tenant['name']}: {str(e)}")
+#             results.append(
+#                 {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
+#             )
 
-    failed_count = len([r for r in results if r["status"] == "error"])
-    if failed_count > 0:
-        categorize_sync_errors(results, "User")
+#     failed_count = len([r for r in results if r["status"] == "error"])
+#     if failed_count > 0:
+#         categorize_sync_errors(results, "User")
 
-    return func.HttpResponse(f"Synced {total} users", status_code=200)
+#     return func.HttpResponse(f"Synced {total} users", status_code=200)
+
+
+# @app.route(route="sync/usersV2", methods=["POST"])
+# def user_sync_v2_http(req: func.HttpRequest) -> func.HttpResponse:
+#     """Manual trigger for V2 user sync"""
+#     tenants = get_tenants()
+#     total = 0
+#     results = []
+
+#     for tenant in tenants:
+#         try:
+#             result = sync_users_v2(tenant["tenant_id"], tenant["name"])
+#             if result["status"] == "success":
+#                 total += result["users_synced"]
+#                 results.append(
+#                     {
+#                         "status": "completed",
+#                         "tenant_id": tenant["tenant_id"],
+#                         "users_synced": result["users_synced"],
+#                         "user_licenses_synced": result.get("user_licenses_synced", 0),
+#                     }
+#                 )
+#             else:
+#                 results.append(
+#                     {
+#                         "status": "error",
+#                         "tenant_id": tenant["tenant_id"],
+#                         "error": result.get("error", "Unknown error"),
+#                     }
+#                 )
+#         except Exception as e:
+#             logging.error(f"Error syncing users V2 for {tenant['name']}: {str(e)}")
+#             results.append(
+#                 {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
+#             )
+
+#     failed_count = len([r for r in results if r["status"] == "error"])
+#     if failed_count > 0:
+#         categorize_sync_errors(results, "User V2")
+
+#     return func.HttpResponse(f"Synced {total} users (V2)", status_code=200)
 
 
 @app.route(route="sync/licenses", methods=["POST"])
@@ -2894,44 +2935,28 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
         # extract and validate request data
-        logging.info("Processing user delete request")
-
-        req_body = req.get_json()
-        if not req_body:
+        user_id = req.route_params.get('user_id')
+        if not user_id:
             return func.HttpResponse(
                 json.dumps({
                     "success": False,
-                    "error": "Request body is required"
+                    "error": "user_id is required in the URL path"
                 }),
                 status_code=400,
                 headers={"Content-Type": "application/json"}
             )
+        
+        logging.info(f"Processing user delete request for user_id: {user_id}")
 
-        # get tenant_id and user identifier from request
-        tenant_id = req_body.get('tenant_id')
-        user_id = req_body.get('user_id')
-        user_principal_name = req_body.get('user_principal_name')
-
-        # validate required parameters
+        # get tenant_id from query parameters or use default
+        tenant_id = req.params.get('tenant_id')
         if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({
-                    "success": False,
-                    "error": "tenant_id is required"
-                }),
-                status_code=400,
-                headers={"Content-Type": "application/json"}
-            )
-
-        if not user_id and not user_principal_name:
-            return func.HttpResponse(
-                json.dumps({
-                    "success": False,
-                    "error": "Either user_id or user_principal_name is required"
-                }),
-                status_code=400,
-                headers={"Content-Type": "application/json"}
-            )
+            # Use default tenant from settings
+            from core.environment import get_tenant_id
+            tenant_id = get_tenant_id()
+            logging.info(f"Using default tenant_id: {tenant_id}")
+        else:
+            logging.info(f"Using provided tenant_id: {tenant_id}")
 
         # check if tenant exists
         tenants = get_tenants()
@@ -2951,16 +2976,9 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
         logging.info(f"Deleting user for tenant: {tenant_name}")
 
         # find and validate user exists in database
-        if user_id:
-            # query by user_id
-            user_query = "SELECT * FROM usersV2 WHERE tenant_id = ? AND user_id = ?"
-            user_result = query(user_query, (tenant_id, user_id))
-            identifier = f"user_id: {user_id}"
-        else:
-            # query by user_principal_name
-            user_query = "SELECT * FROM usersV2 WHERE tenant_id = ? AND user_principal_name = ?"
-            user_result = query(user_query, (tenant_id, user_principal_name))
-            identifier = f"user_principal_name: {user_principal_name}"
+        user_query = "SELECT * FROM usersV2 WHERE tenant_id = ? AND user_id = ?"
+        user_result = query(user_query, (tenant_id, user_id))
+        identifier = f"user_id: {user_id}"
 
         if not user_result:
             return func.HttpResponse(

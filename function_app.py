@@ -1,6 +1,7 @@
 import logging
 import azure.functions as func
 from core.graph_client import GraphClient
+from core.graph_beta_client import GraphBetaClient
 from core.tenant_manager import get_tenants
 from core.graph_client import GraphClient
 # from sync.user_sync import sync_users
@@ -2878,6 +2879,166 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
                 "error": error_msg,
                 "metadata": {
                     "operation": "create_user",
+                    "timestamp": datetime.now().isoformat()
+                }
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
+
+@app.route(route="users/{user_id}/delete", methods=["DELETE"])
+def delete_user(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP DELETE endpoint to delete a single user account"""
+    # single tenant, single resource operation
+
+    try:
+        # extract and validate request data
+        logging.info("Processing user delete request")
+
+        req_body = req.get_json()
+        if not req_body:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "Request body is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # get tenant_id and user identifier from request
+        tenant_id = req_body.get('tenant_id')
+        user_id = req_body.get('user_id')
+        user_principal_name = req_body.get('user_principal_name')
+
+        # validate required parameters
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        if not user_id and not user_principal_name:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "Either user_id or user_principal_name is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        logging.info(f"Deleting user for tenant: {tenant_name}")
+
+        # find and validate user exists in database
+        if user_id:
+            # query by user_id
+            user_query = "SELECT * FROM usersV2 WHERE tenant_id = ? AND user_id = ?"
+            user_result = query(user_query, (tenant_id, user_id))
+            identifier = f"user_id: {user_id}"
+        else:
+            # query by user_principal_name
+            user_query = "SELECT * FROM usersV2 WHERE tenant_id = ? AND user_principal_name = ?"
+            user_result = query(user_query, (tenant_id, user_principal_name))
+            identifier = f"user_principal_name: {user_principal_name}"
+
+        if not user_result:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"User not found ({identifier})"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        user = user_result[0]
+        logging.info(f"Found user: {user['user_principal_name']}")
+
+        # Initialize Graph Beta Client
+        graph_client = GraphBetaClient(tenant_id)
+
+        # Delete user via Graph API
+        delete_result = graph_client.delete_user(user['user_id'])
+
+        if delete_result.get('status') == 'error':
+            error_msg = delete_result.get('error', 'Unknown error')
+            logging.error(f"Failed to delete user: {error_msg}")
+            
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to delete user: {error_msg}",
+                    "data": {
+                        "user_id": user['user_id'],
+                        "user_principal_name": user['user_principal_name'],
+                        "tenant_id": tenant_id,
+                        "tenant_name": tenant_name,
+                        "status": "failed",
+                        "error": error_msg
+                    }
+                }),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Remove user from local database
+        try:
+            delete_query = "DELETE FROM usersV2 WHERE tenant_id = ? AND user_id = ?"
+            query(delete_query, (tenant_id, user['user_id']))
+            logging.info(f"Successfully removed user {user['user_principal_name']} from database")
+        except Exception as db_error:
+            logging.warning(f"Failed to remove user from database: {str(db_error)}")
+            # Continue anyway as the user was deleted from Graph API
+
+        # Return success response
+        return func.HttpResponse(
+            json.dumps({
+                "success": True,
+                "message": f"User {user['user_principal_name']} deleted successfully",
+                "data": {
+                    "user_id": user['user_id'],
+                    "user_principal_name": user['user_principal_name'],
+                    "tenant_id": tenant_id,
+                    "tenant_name": tenant_name,
+                    "deleted_at": datetime.now().isoformat()
+                }
+            }),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+
+    except Exception as e:
+        error_msg = f"Unexpected error during delete_user: {str(e)}"
+        logging.error(error_msg)
+        logging.exception("Full exception details:")
+
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg,
+                "metadata": {
+                    "operation": "delete_user",
                     "timestamp": datetime.now().isoformat()
                 }
             }),

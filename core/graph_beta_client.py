@@ -228,3 +228,89 @@ class GraphBetaClient:
             error_msg = f"Unexpected error while creating user: {str(e)}"
             logging.error(error_msg)
             return {"status": "error", "error": error_msg}
+
+    def delete_user(self, user_id):
+        """Delete a user account via Microsoft Graph Beta API"""
+        
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.get_token()}",
+                "Content-Type": "application/json",
+            }
+            
+            # Microsoft Graph Beta API endpoint to delete user
+            url = f"{self.base_url}/users/{user_id}"
+            
+            # Debug logging
+            logging.info(f"Deleting user {user_id} in tenant: {self.tenant_id}")
+            logging.info(f"Graph Beta API URL: {url}")
+            
+            response = requests.delete(url, headers=headers)
+            
+            # Handle rate limiting
+            if response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", 5))
+                logging.warning(f"Rate limited while deleting user - waiting {retry_after} seconds")
+                time.sleep(retry_after)
+                # retry the request
+                response = requests.delete(url, headers=headers)
+            
+            # Enhanced error handling
+            if response.status_code == 401:
+                error_msg = f"401 Unauthorized - Cannot delete user: Authentication failed"
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+                
+            elif response.status_code == 403:
+                error_msg = f"403 Forbidden - Cannot delete user: Insufficient permissions"
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+                
+            elif response.status_code == 404:
+                error_msg = f"404 Not Found - User {user_id} not found"
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+                
+            elif response.status_code == 400:
+                try:
+                    error_details = response.json()
+                    error_msg = f"400 Bad Request - Invalid request: {error_details.get('error', {}).get('message', 'Unknown error')}"
+                except:
+                    error_msg = f"400 Bad Request - Invalid request"
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+                
+            elif response.status_code == 503:
+                error_msg = f"503 Service Unavailable - Microsoft Graph service temporarily unavailable"
+                logging.warning(error_msg)
+                return {"status": "error", "error": error_msg}
+            
+            # Check for success (204 No Content is expected for DELETE operations)
+            if response.status_code == 204:
+                logging.info(f"Successfully deleted user {user_id}")
+                return {
+                    "status": "success", 
+                    "message": f"User {user_id} deleted successfully"
+                }
+            
+            # Handle other error status codes
+            logging.error(f"Graph Beta API returned status code: {response.status_code}")
+            logging.error(f"Response headers: {dict(response.headers)}")
+            try:
+                error_details = response.json()
+                logging.error(f"Response body: {error_details}")
+            except:
+                logging.error(f"Response text: {response.text}")
+            
+            response.raise_for_status()
+            return {"status": "success", "message": "User deleted successfully"}
+            
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Network error while deleting user: {str(e)}"
+            logging.error(error_msg)
+            return {"status": "error", "error": error_msg}
+            
+        except Exception as e:
+            error_msg = f"Unexpected error while deleting user: {str(e)}"
+            logging.error(error_msg)
+            return {"status": "error", "error": error_msg}

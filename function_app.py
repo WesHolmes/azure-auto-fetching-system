@@ -18,7 +18,7 @@ from analysis.user_analysis import (
     calculate_license_optimization,
 )
 from datetime import datetime, timedelta
-from core.databaseV2 import query
+from core.databaseV2 import query, upsert_many
 import json
 import re
 # from sync.hibp_sync import sync_hibp_breaches

@@ -207,7 +207,7 @@ def transform_user_records(users, tenant_id, mfa_lookup):
             last_password_change = user.get("lastPasswordChangeDateTime")
             
             # Get created date
-            created_date = user.get("createdDateTime") or datetime.now().isoformat()
+            created_at = user.get("createdDateTime") or datetime.now().isoformat()
             
             record = {
                 "user_id": user_id,
@@ -225,7 +225,7 @@ def transform_user_records(users, tenant_id, mfa_lookup):
                 "group_count": group_count,
                 "last_sign_in_date": last_sign_in,
                 "last_password_change": last_password_change,
-                "created_date": created_date,
+                "created_at": created_at,
                 "last_updated": datetime.now().isoformat(),
             }
             records.append(record)
@@ -234,7 +234,7 @@ def transform_user_records(users, tenant_id, mfa_lookup):
             logger.error(f"Failed to process user {display_name}: {str(e)}")
             # Add basic record
             primary_email = user.get("mail") or upn or "unknown@domain.com"
-            created_date = user.get("createdDateTime") or datetime.now().isoformat()
+            created_at = user.get("createdDateTime") or datetime.now().isoformat()
             
             basic_record = {
                 "user_id": user_id,
@@ -252,7 +252,7 @@ def transform_user_records(users, tenant_id, mfa_lookup):
                 "group_count": 0,
                 "last_sign_in_date": None,
                 "last_password_change": user.get("lastPasswordChangeDateTime"),
-                "created_date": created_date,
+                "created_at": created_at,
                 "last_updated": datetime.now().isoformat(),
             }
             records.append(basic_record)

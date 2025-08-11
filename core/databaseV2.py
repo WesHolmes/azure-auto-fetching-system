@@ -61,7 +61,7 @@ def init_schema():
                 group_count INTEGER NOT NULL DEFAULT 0,
                 last_sign_in_date TEXT, -- ISO datetime format
                 last_password_change TEXT, -- ISO datetime format
-                created_date TEXT NOT NULL DEFAULT (datetime('now')),
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 last_updated TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (user_id, tenant_id)
             )
@@ -362,4 +362,4 @@ def execute_query(sql, params=None):
 
 
 # Schema will be initialized when sync functions are called
-# init_schema()
+init_schema()

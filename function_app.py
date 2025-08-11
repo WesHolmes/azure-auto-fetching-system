@@ -19,7 +19,7 @@ from analysis.user_analysis import (
     calculate_license_optimization,
 )
 from datetime import datetime, timedelta
-from core.databaseV2 import query, upsert_many
+from core.databaseV2 import query, upsert_many, execute_query
 import json
 import re
 # from sync.hibp_sync import sync_hibp_breaches
@@ -1178,7 +1178,7 @@ def disable_user(req: func.HttpRequest) -> func.HttpResponse:
         update_query = "UPDATE usersV2 SET account_enabled = 0, last_updated = ? WHERE tenant_id = ? AND user_id = ?"
 
         try:
-            query(update_query, (current_time, tenant_id, user['user_id']))
+            execute_query(update_query, (current_time, tenant_id, user['user_id']))
             logging.info(f"Updated local database for user {user['user_principal_name']}")
         except Exception as db_error:
             logging.error(f"Failed to update local database: {str(db_error)}")
@@ -1406,7 +1406,7 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
                     update_query = "UPDATE usersV2 SET account_enabled = 0, last_updated = ? WHERE tenant_id = ? AND user_id = ?"
 
                     try:
-                        query(update_query, (current_time, tenant_id, user_id))
+                        execute_query(update_query, (current_time, tenant_id, user_id))
                         logging.info(f"Updated local database for user {user_principal_name}")
                     except Exception as db_error:
                         logging.warning(f"Graph API disable succeeded but local DB update failed for {user_principal_name}: {str(db_error)}")
@@ -1662,7 +1662,7 @@ def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
         update_query = "UPDATE usersV2 SET last_updated = ? WHERE tenant_id = ? AND user_id = ?"
 
         try:
-            query(update_query, (current_time, tenant_id, user['user_id']))
+            execute_query(update_query, (current_time, tenant_id, user['user_id']))
             logging.info(f"Updated local database for user {user['user_principal_name']}")
         except Exception as db_error:
             logging.warning(f"Graph API reset succeeded but local DB update failed for {user['user_principal_name']}: {str(db_error)}")
@@ -2734,21 +2734,6 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
                 headers={"Content-Type": "application/json"}
             )
 
-        # Check if tenant exists
-        tenants = get_tenants()
-        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
-
-        if tenant_id not in tenant_names:
-            return func.HttpResponse(
-                json.dumps({
-                    "success": False,
-                    "error": f"Tenant '{tenant_id}' not found"
-                }),
-                status_code=404,
-                headers={"Content-Type": "application/json"}
-            )
-
-        tenant_name = tenant_names[tenant_id]
         execution_time = datetime.now().isoformat()
         
         # Extract first and last names from displayName
@@ -2768,8 +2753,27 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
             first_name = "user"
             last_name = "account"
         
-        # Construct domain based on tenant name - use .onmicrosoft.com for Azure AD tenants
-        domain = f"{tenant_name}.onmicrosoft.com"
+        graph_client = GraphBetaClient(tenant_id)
+        
+        # Fetch a single user from the tenant to derive the domain
+        try:
+            users_response = graph_client.get("/users", top=1, select=["userPrincipalName"])
+            if users_response and len(users_response) > 0:
+                existing_user = users_response[0]
+                existing_user_principal_name = existing_user.get('userPrincipalName', '')
+                # Extract domain from existing user's userPrincipalName
+                if '@' in existing_user_principal_name:
+                    domain = existing_user_principal_name.split('@')[1]
+                else:
+                    # Fallback to default domain format
+                    domain = f"{tenant_id}.onmicrosoft.com"
+            else:
+                # No existing users, use default domain format
+                domain = f"{tenant_id}.onmicrosoft.com"
+        except Exception as e:
+            logging.warning(f"Could not fetch existing user to derive domain: {str(e)}")
+            # Fallback to default domain format
+            domain = f"{tenant_id}.onmicrosoft.com"
         
         # Construct userPrincipalName from first name, last name, and domain
         user_principal_name = f"{first_name}{last_name}@{domain}"
@@ -2786,7 +2790,7 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
             logging.info(f"Removing unsupported 'defaultGroups' field: {user_data['defaultGroups']}")
             del user_data["defaultGroups"]
         
-        logging.info(f"Creating user {user_principal_name} in tenant: {tenant_name}")
+        logging.info(f"Creating user {user_principal_name} in tenant: {tenant_id}")
 
         # Check if user already exists
         existing_user_query = "SELECT user_id FROM usersV2 WHERE tenant_id = ? AND user_principal_name = ?"
@@ -2800,7 +2804,7 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
                     "data": {
                         "user_principal_name": user_principal_name,
                         "tenant_id": tenant_id,
-                        "tenant_name": tenant_name,
+                        "domain": domain,
                         "constructed_from": {
                             "display_name": display_name,
                             "first_name": first_name,
@@ -2815,10 +2819,33 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
 
         # Create user via Graph API
         logging.info(f"Creating user {user_principal_name} via Graph API")
-        from core.graph_beta_client import GraphBetaClient
-        graph_client = GraphBetaClient(tenant_id)
-
-        create_result = graph_client.create_user(user_data)
+        
+        try:
+            create_result = graph_client.create_user(user_data)
+        except Exception as graph_error:
+            error_msg = f"Graph API error: {str(graph_error)}"
+            logging.error(f"Failed to create user via Graph API: {error_msg}")
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to create user: {error_msg}",
+                    "data": {
+                        "user_principal_name": user_principal_name,
+                        "tenant_id": tenant_id,
+                        "domain": domain,
+                        "status": "failed",
+                        "error": error_msg
+                    },
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "domain": domain,
+                        "operation": "create_user",
+                        "execution_time": execution_time
+                    }
+                }),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
 
         if create_result.get('status') != 'success':
             error_msg = create_result.get('error', 'Unknown error creating user')
@@ -2830,13 +2857,13 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
                     "data": {
                         "user_principal_name": user_principal_name,
                         "tenant_id": tenant_id,
-                        "tenant_name": tenant_name,
+                        "domain": domain,
                         "status": "failed",
                         "error": error_msg
                     },
                     "metadata": {
                         "tenant_id": tenant_id,
-                        "tenant_name": tenant_name,
+                        "domain": domain,
                         "operation": "create_user",
                         "execution_time": execution_time
                     }
@@ -2848,6 +2875,31 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
         # Extract created user data
         created_user_data = create_result.get('data', {})
         user_id = created_user_data.get('id')
+        
+        if not user_id:
+            error_msg = "Graph API returned success but no user ID in response"
+            logging.error(f"Failed to create user: {error_msg}")
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to create user: {error_msg}",
+                    "data": {
+                        "user_principal_name": user_principal_name,
+                        "tenant_id": tenant_id,
+                        "domain": domain,
+                        "status": "failed",
+                        "error": error_msg
+                    },
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "domain": domain,
+                        "operation": "create_user",
+                        "execution_time": execution_time
+                    }
+                }),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
         
         # Prepare user record for database
         user_record = {
@@ -2866,7 +2918,7 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
             "group_count": 0,  # New users are not in any groups yet
             "last_sign_in_date": None,  # New users haven't signed in yet
             "last_password_change": None,  # New users haven't changed password yet
-            "created_date": datetime.now().isoformat(),
+            "created_at": datetime.now().isoformat(),
             "last_updated": datetime.now().isoformat()
         }
 
@@ -2888,7 +2940,7 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
                     "user_principal_name": user_principal_name,
                     "display_name": created_user_data.get('displayName'),
                     "tenant_id": tenant_id,
-                    "tenant_name": tenant_name,
+                    "domain": domain,
                     "account_enabled": created_user_data.get('accountEnabled', True),
                     "created_at": execution_time,
                     "constructed_from": {
@@ -2900,7 +2952,7 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
                 },
                 "metadata": {
                     "tenant_id": tenant_id,
-                    "tenant_name": tenant_name,
+                    "domain": domain,
                     "operation": "create_user",
                     "execution_time": execution_time
                 }
@@ -2951,10 +3003,20 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
         # get tenant_id from query parameters or use default
         tenant_id = req.params.get('tenant_id')
         if not tenant_id:
-            # Use default tenant from settings
-            from core.environment import get_tenant_id
-            tenant_id = get_tenant_id()
-            logging.info(f"Using default tenant_id: {tenant_id}")
+            # Use first available tenant as fallback
+            tenants = get_tenants()
+            if tenants:
+                tenant_id = tenants[0]["tenant_id"]
+                logging.info(f"Using fallback tenant_id: {tenant_id}")
+            else:
+                return func.HttpResponse(
+                    json.dumps({
+                        "success": False,
+                        "error": "No tenants configured"
+                    }),
+                    status_code=500,
+                    headers={"Content-Type": "application/json"}
+                )
         else:
             logging.info(f"Using provided tenant_id: {tenant_id}")
 
@@ -2999,7 +3061,7 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
         # Delete user via Graph API
         delete_result = graph_client.delete_user(user['user_id'])
 
-        if delete_result.get('status') == 'error':
+        if delete_result.get('status') != 'success':
             error_msg = delete_result.get('error', 'Unknown error')
             logging.error(f"Failed to delete user: {error_msg}")
             
@@ -3020,11 +3082,15 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
                 headers={"Content-Type": "application/json"}
             )
 
-        # Remove user from local database
+        # Remove user and related records from local database
         try:
-            delete_query = "DELETE FROM usersV2 WHERE tenant_id = ? AND user_id = ?"
-            query(delete_query, (tenant_id, user['user_id']))
-            logging.info(f"Successfully removed user {user['user_principal_name']} from database")
+            # Delete related records first (foreign key constraints)
+            execute_query("DELETE FROM user_licensesV2 WHERE tenant_id = ? AND user_id = ?", (tenant_id, user['user_id']))
+            execute_query("DELETE FROM user_rolesV2 WHERE tenant_id = ? AND user_id = ?", (tenant_id, user['user_id']))
+            
+            # Delete user record
+            execute_query("DELETE FROM usersV2 WHERE tenant_id = ? AND user_id = ?", (tenant_id, user['user_id']))
+            logging.info(f"Successfully removed user {user['user_principal_name']} and related records from database")
         except Exception as db_error:
             logging.warning(f"Failed to remove user from database: {str(db_error)}")
             # Continue anyway as the user was deleted from Graph API

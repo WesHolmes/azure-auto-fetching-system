@@ -777,7 +777,7 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="tenant/licenses", methods=["GET"])
 def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP GET endpoint for single tenant license data"""
-    # Returns structured response with license optimization actions only
+    # Returns structured response with license options and optimization actions
 
     try:
         # extract & validate tenant id
@@ -830,6 +830,74 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
 
         # grab license optimization data
         license_optimization = calculate_license_optimization(tenant_id)
+        
+        # fetch fresh license data from Microsoft Graph API for frontend dropdown
+        try:
+            graph_client = GraphBetaClient(tenant_id)
+            # Get fresh license data from Graph API
+            logging.info(f"Fetching licenses from Graph API for tenant {tenant_id}")
+            fresh_licenses = graph_client.get("/subscribedSkus")
+            
+            # Debug logging to see what we got
+            logging.info(f"Graph API response type: {type(fresh_licenses)}")
+            logging.info(f"Graph API response: {fresh_licenses}")
+            
+            # Check if we got valid data (should be a list)
+            if not isinstance(fresh_licenses, list):
+                logging.warning(f"Graph API returned unexpected data type: {type(fresh_licenses)}. Data: {fresh_licenses}")
+                raise Exception(f"Invalid response format from Graph API: {type(fresh_licenses)}")
+            
+            # Transform Graph API data to match expected format
+            license_options = []
+            for license_info in fresh_licenses:
+                if isinstance(license_info, dict):
+                    try:
+                        # Extract the key fields safely
+                        sku_part_number = license_info.get("skuPartNumber", "")
+                        sku_id = license_info.get("skuId", "")
+                        capability_status = license_info.get("capabilityStatus", "")
+                        
+                        # Use skuPartNumber as display name, fallback to skuId
+                        display_name = sku_part_number if sku_part_number else sku_id
+                        
+                        # Determine status based on capabilityStatus
+                        if isinstance(capability_status, dict):
+                            status = "active" if capability_status.get("enabled", 0) > 0 else "inactive"
+                        else:
+                            # If capabilityStatus is a string like "Enabled", use that
+                            status = "active" if str(capability_status).lower() == "enabled" else "inactive"
+                        
+                        license_options.append({
+                            "license_display_name": display_name,
+                            "license_partnumber": display_name,
+                            "monthly_cost": 0.0,  # Graph API doesn't provide cost info
+                            "status": status
+                        })
+                        
+                        logging.info(f"Processed license: {display_name} (Status: {status})")
+                        
+                    except Exception as license_error:
+                        logging.warning(f"Error processing license info {license_info}: {str(license_error)}")
+                        continue
+                else:
+                    logging.warning(f"Skipping non-dict license info: {type(license_info)} - {license_info}")
+            
+            logging.info(f"Fetched {len(license_options)} fresh licenses from Graph API for tenant {tenant_id}")
+            
+        except Exception as e:
+            logging.warning(f"Failed to fetch fresh licenses from Graph API: {str(e)}. Falling back to database.")
+            # Fallback to database if Graph API fails
+            license_options_query = """
+            SELECT DISTINCT 
+                license_display_name,
+                license_partnumber,
+                monthly_cost,
+                status
+            FROM licenses 
+            WHERE tenant_id = ?
+            ORDER BY license_display_name
+            """
+            license_options = query(license_options_query, (tenant_id,))
 
         # calculate metrics
         total_license_types = total_licenses_result[0]["count"] if total_licenses_result else 0
@@ -878,7 +946,7 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
         # build response structure
         response_data = {
             "success": True,
-            "data": [],  # empty for metadata endpoints
+            "data": license_options,  # now contains actual license options for frontend
             "metadata": {
                 "tenant_id": tenant_id,
                 "tenant_name": tenant_name,
@@ -916,7 +984,7 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="tenant/roles", methods=["GET"])
 def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP GET endpoint for single tenant roles data"""
-    # Returns structured response with role optimization actions only
+    # Returns structured response with role options and optimization actions
 
     try:
         # extract & validate tenant id
@@ -970,6 +1038,113 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
         # Users with multiple roles (potential over-privileged)
         multi_role_users_query = "SELECT COUNT(*) as count FROM (SELECT user_id FROM user_rolesV2 WHERE tenant_id = ? GROUP BY user_id HAVING COUNT(role_id) > 1)"
         multi_role_users_result = query(multi_role_users_query, (tenant_id,))
+        
+        # fetch fresh role data from Microsoft Graph API for frontend dropdown
+        try:
+            graph_client = GraphBetaClient(tenant_id)
+            # Get fresh role data from Graph API - use directoryRoles instead of directoryRoleTemplates
+            # directoryRoles shows only ACTIVE roles in the tenant, not all possible templates
+            logging.info(f"Fetching ACTIVE roles from Graph API for tenant {tenant_id}")
+            fresh_roles = graph_client.get("/directoryRoles")
+            
+            # Debug logging to see what we got
+            logging.info(f"Graph API response type: {type(fresh_roles)}")
+            logging.info(f"Graph API response: {fresh_roles}")
+            
+            # Check if we got valid data (should be a list)
+            if not isinstance(fresh_roles, list):
+                logging.warning(f"Graph API returned unexpected data type: {type(fresh_roles)}. Data: {fresh_roles}")
+                raise Exception(f"Invalid response format from Graph API: {type(fresh_roles)}")
+            
+            # Transform Graph API data to match expected format
+            role_options = []
+            seen_role_ids = set()  # Track seen role IDs to prevent duplicates
+            
+            for role_info in fresh_roles:
+                if isinstance(role_info, dict):
+                    try:
+                        # Extract the key fields safely
+                        role_id = role_info.get("id", "")
+                        display_name = role_info.get("displayName", "")
+                        description = role_info.get("description", "")
+                        
+                        # Skip if we've already seen this role ID
+                        if role_id in seen_role_ids:
+                            logging.info(f"Skipping duplicate role ID: {role_id}")
+                            continue
+                        
+                        # Use displayName if available, fallback to id
+                        final_display_name = display_name if display_name else role_id
+                        
+                        role_options.append({
+                            "role_id": role_id,
+                            "role_display_name": final_display_name,
+                            "role_description": description,
+                            "member_count": 0  # Graph API doesn't provide member count for active roles
+                        })
+                        
+                        seen_role_ids.add(role_id)  # Mark this role ID as seen
+                        logging.info(f"Processed role: {final_display_name} (ID: {role_id})")
+                        
+                    except Exception as role_error:
+                        logging.warning(f"Error processing role info {role_info}: {str(role_error)}")
+                        continue
+                else:
+                    logging.warning(f"Skipping non-dict role info: {type(role_info)} - {role_info}")
+            
+            logging.info(f"Fetched {len(role_options)} UNIQUE active roles from Graph API for tenant {tenant_id}")
+            
+            # If we got no roles from Graph API, try directoryRoleTemplates as fallback
+            if len(role_options) == 0:
+                logging.info("No active roles found, trying directoryRoleTemplates...")
+                template_roles = graph_client.get("/directoryRoleTemplates")
+                if isinstance(template_roles, list):
+                    for role_info in template_roles:
+                        if isinstance(role_info, dict):
+                            role_id = role_info.get("id", "")
+                            display_name = role_info.get("displayName", "")
+                            if role_id and role_id not in seen_role_ids:
+                                role_options.append({
+                                    "role_id": role_id,
+                                    "role_display_name": display_name or role_id,
+                                    "role_description": role_info.get("description", ""),
+                                    "member_count": 0
+                                })
+                                seen_role_ids.add(role_id)
+                                logging.info(f"Added template role: {display_name or role_id}")
+            
+            # Final deduplication and validation
+            final_role_options = []
+            final_seen_ids = set()
+            
+            for role in role_options:
+                if role["role_id"] not in final_seen_ids:
+                    final_role_options.append(role)
+                    final_seen_ids.add(role["role_id"])
+                else:
+                    logging.warning(f"Duplicate role found and removed: {role['role_display_name']} (ID: {role['role_id']})")
+            
+            role_options = final_role_options
+            logging.info(f"Final result: {len(role_options)} unique roles after deduplication")
+            
+            # Log all final roles for debugging
+            for role in role_options:
+                logging.info(f"Final role: {role['role_display_name']} (ID: {role['role_id']})")
+            
+        except Exception as e:
+            logging.warning(f"Failed to fetch fresh roles from Graph API: {str(e)}. Falling back to database.")
+            # Fallback to database if Graph API fails
+            role_options_query = """
+            SELECT DISTINCT 
+                role_id,
+                role_display_name,
+                role_description,
+                member_count
+            FROM roles 
+            WHERE tenant_id = ?
+            ORDER BY role_display_name
+            """
+            role_options = query(role_options_query, (tenant_id,))
 
         # calculate metrics
         total_roles = total_roles_result[0]["count"] if total_roles_result else 0
@@ -1010,7 +1185,7 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
         # build response structure
         response_data = {
             "success": True,
-            "data": [],  # empty for metadata endpoints
+            "data": role_options,  # now contains actual role options for frontend
             "metadata": {
                 "tenant_id": tenant_id,
                 "tenant_name": tenant_name,
@@ -1033,6 +1208,120 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         error_msg = f"Error retrieving roles data: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
+
+@app.route(route="tenant/groups", methods=["GET"])
+def get_tenant_groups(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single tenant groups data"""
+    # Returns structured response with group options for frontend
+
+    try:
+        # extract & validate tenant id
+        tenant_id = req.params.get('tenant_id')
+        logging.info(f"Groups API request for tenant: {tenant_id}")
+
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id parameter is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Tenant '{tenant_id}' not found"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        logging.info(f"Processing groups data for tenant: {tenant_name}")
+
+        # fetch group options for frontend dropdown
+        # Note: This is a simplified implementation - you may need to adjust based on your actual groups table
+        group_options_query = """
+        SELECT DISTINCT 
+            group_id,
+            display_name,
+            description,
+            group_type
+        FROM groups 
+        WHERE tenant_id = ?
+        ORDER BY display_name
+        """
+        
+        try:
+            group_options = query(group_options_query, (tenant_id,))
+        except Exception as e:
+            # If groups table doesn't exist or query fails, provide default groups
+            logging.warning(f"Could not fetch groups from database: {str(e)}")
+            group_options = [
+                {
+                    "group_id": "all-users",
+                    "display_name": "All Users",
+                    "description": "Default group for all users",
+                    "group_type": "Security"
+                },
+                {
+                    "group_id": "it-department",
+                    "display_name": "IT Department",
+                    "description": "IT staff and administrators",
+                    "group_type": "Security"
+                },
+                {
+                    "group_id": "sales-department",
+                    "display_name": "Sales Department",
+                    "description": "Sales team members",
+                    "group_type": "Security"
+                },
+                {
+                    "group_id": "marketing-department",
+                    "display_name": "Marketing Department",
+                    "description": "Marketing team members",
+                    "group_type": "Security"
+                }
+            ]
+
+        # build response structure
+        response_data = {
+            "success": True,
+            "data": group_options,  # contains group options for frontend
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "timestamp": datetime.now().isoformat(),
+                "total_groups": len(group_options),
+                "endpoint": "get_tenant_groups"
+            }
+        }
+
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+
+    except Exception as e:
+        error_msg = f"Error retrieving groups data: {str(e)}"
         logging.error(error_msg)
         return func.HttpResponse(
             json.dumps({
@@ -2785,12 +3074,26 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
         user_data["userPrincipalName"] = user_principal_name
         user_data["mailNickname"] = mail_nickname
         
+        # Extract role and license assignments before filtering user_data
+        role_assignment = user_data.get("roleAssignment")
+        license_type = user_data.get("licenseType")
+        
         # Remove unsupported fields that might be sent by the frontend
         if "defaultGroups" in user_data:
             logging.info(f"Removing unsupported 'defaultGroups' field: {user_data['defaultGroups']}")
             del user_data["defaultGroups"]
         
+        # Remove role and license fields as they need to be handled separately
+        if "roleAssignment" in user_data:
+            logging.info(f"Extracted role assignment: {role_assignment}")
+            del user_data["roleAssignment"]
+        if "licenseType" in user_data:
+            logging.info(f"Extracted license type: {license_type}")
+            del user_data["licenseType"]
+        
         logging.info(f"Creating user {user_principal_name} in tenant: {tenant_id}")
+        logging.info(f"Role assignment: {role_assignment}")
+        logging.info(f"License type: {license_type}")
 
         # Check if user already exists
         existing_user_query = "SELECT user_id FROM usersV2 WHERE tenant_id = ? AND user_principal_name = ?"
@@ -2930,6 +3233,75 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
             logging.warning(f"Failed to add user to database: {str(db_error)}")
             # Continue anyway as the user was created in Graph API
 
+        # Assign role if specified
+        if role_assignment:
+            try:
+                logging.info(f"Assigning role '{role_assignment}' to user {user_id}")
+                role_result = graph_client.assign_role(user_id, role_assignment)
+                
+                if role_result.get('status') == 'success':
+                    logging.info(f"Successfully assigned role '{role_assignment}' to user {user_id}")
+                    
+                    # Insert role assignment into database
+                    role_record = {
+                        "user_id": user_id,
+                        "tenant_id": tenant_id,
+                        "role_id": role_assignment,
+                        "user_principal_name": user_principal_name,
+                        "role_display_name": role_assignment,
+                        "role_description": f"Role assigned via create_user endpoint",
+                        "created_at": datetime.now().isoformat(),
+                        "last_updated": datetime.now().isoformat()
+                    }
+                    
+                    try:
+                        logging.info(f"Attempting to insert role record: {role_record}")
+                        upsert_many("user_rolesV2", [role_record])
+                        logging.info(f"Successfully added role assignment to database for user {user_id}")
+                    except Exception as role_db_error:
+                        logging.error(f"Failed to add role assignment to database: {str(role_db_error)}")
+                        logging.error(f"Role record that failed: {role_record}")
+                        logging.error(f"Table name: user_rolesV2")
+                else:
+                    logging.warning(f"Failed to assign role '{role_assignment}' to user {user_id}: {role_result.get('error', 'Unknown error')}")
+                    
+            except Exception as role_error:
+                logging.warning(f"Error assigning role '{role_assignment}' to user {user_id}: {str(role_error)}")
+
+        # Assign license if specified
+        if license_type:
+            try:
+                logging.info(f"Assigning license '{license_type}' to user {user_id}")
+                license_result = graph_client.assign_license(user_id, license_type)
+                
+                if license_result.get('status') == 'success':
+                    logging.info(f"Successfully assigned license '{license_type}' to user {user_id}")
+                    
+                    # Insert license assignment into database
+                    license_record = {
+                        "user_id": user_id,
+                        "tenant_id": tenant_id,
+                        "license_id": license_type,
+                        "user_principal_name": user_principal_name,
+                        "license_display_name": license_type,
+                        "license_partnumber": license_type,
+                        "is_active": 1,
+                        "monthly_cost": 0.0,
+                        "created_at": datetime.now().isoformat(),
+                        "last_updated": datetime.now().isoformat()
+                    }
+                    
+                    try:
+                        upsert_many("user_licensesV2", [license_record])
+                        logging.info(f"Successfully added license assignment to database for user {user_id}")
+                    except Exception as license_db_error:
+                        logging.warning(f"Failed to add license assignment to database: {str(license_db_error)}")
+                else:
+                    logging.warning(f"Failed to assign license '{license_type}' to user {user_id}: {license_result.get('error', 'Unknown error')}")
+                    
+            except Exception as license_error:
+                logging.warning(f"Error assigning license '{license_type}' to user {user_id}: {str(license_error)}")
+
         # Return success response
         return func.HttpResponse(
             json.dumps({
@@ -2943,6 +3315,8 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
                     "domain": domain,
                     "account_enabled": created_user_data.get('accountEnabled', True),
                     "created_at": execution_time,
+                    "role_assignment": role_assignment,
+                    "license_type": license_type,
                     "constructed_from": {
                         "display_name": display_name,
                         "first_name": first_name,

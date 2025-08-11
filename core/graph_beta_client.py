@@ -152,12 +152,26 @@ class GraphBetaClient:
             # Microsoft Graph Beta API endpoint to create user
             url = f"{self.base_url}/users"
             
+            # Filter out non-standard Graph API fields
+            graph_user_data = {
+                'accountEnabled': user_data.get('accountEnabled', True),
+                'displayName': user_data.get('displayName'),
+                'mailNickname': user_data.get('mailNickname'),
+                'passwordProfile': user_data.get('passwordProfile'),
+                'userPrincipalName': user_data.get('userPrincipalName'),
+                'usageLocation': user_data.get('usageLocation', 'US')
+            }
+            
+            # Remove None values
+            graph_user_data = {k: v for k, v in graph_user_data.items() if v is not None}
+            
             # Debug logging
             logging.info(f"Creating user in tenant: {self.tenant_id}")
             logging.info(f"Graph Beta API URL: {url}")
-            logging.info(f"User data: {user_data}")
+            logging.info(f"Original user data: {user_data}")
+            logging.info(f"Filtered Graph API data: {graph_user_data}")
             
-            response = requests.post(url, headers=headers, json=user_data)
+            response = requests.post(url, headers=headers, json=graph_user_data)
             
             # Handle rate limiting
             if response.status_code == 429:
@@ -201,6 +215,11 @@ class GraphBetaClient:
             if response.status_code == 201:
                 created_user = response.json()
                 logging.info(f"Successfully created user {created_user.get('userPrincipalName', 'Unknown')}")
+                
+                # Note: Role and license assignments need to be done separately
+                # - Role assignment: POST /users/{id}/appRoleAssignments
+                # - License assignment: POST /users/{id}/assignLicense
+                
                 return {
                     "status": "success", 
                     "message": f"User {created_user.get('userPrincipalName', 'Unknown')} created successfully",
@@ -314,3 +333,187 @@ class GraphBetaClient:
             error_msg = f"Unexpected error while deleting user: {str(e)}"
             logging.error(error_msg)
             return {"status": "error", "error": error_msg}
+
+    def assign_role(self, user_id, role_name):
+        """Assign a directory role to a user via Microsoft Graph Beta API"""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.get_token()}",
+                "Content-Type": "application/json",
+            }
+            
+            # First, get the role template ID for the role name
+            role_url = f"{self.base_url}/directoryRoleTemplates"
+            logging.info(f"Fetching role template for '{role_name}'")
+            
+            role_response = requests.get(role_url, headers=headers)
+            if role_response.status_code != 200:
+                error_msg = f"Failed to fetch role templates: HTTP {role_response.status_code}"
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+            
+            role_templates = role_response.json().get("value", [])
+            target_role = None
+            
+            # Find the role template by display name
+            for role in role_templates:
+                if role.get("displayName", "").lower() == role_name.lower():
+                    target_role = role
+                    break
+            
+            if not target_role:
+                error_msg = f"Role '{role_name}' not found in available roles"
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+            
+            role_template_id = target_role.get("id")
+            logging.info(f"Found role template ID: {role_template_id} for role: {role_name}")
+            
+            # First, check if the role is activated in the tenant
+            activated_roles_url = f"{self.base_url}/directoryRoles"
+            activated_response = requests.get(activated_roles_url, headers=headers)
+            
+            if activated_response.status_code == 200:
+                activated_roles = activated_response.json().get("value", [])
+                role_exists = any(role.get("roleTemplateId") == role_template_id for role in activated_roles)
+                
+                if not role_exists:
+                    # Activate the role in the tenant first
+                    logging.info(f"Role '{role_name}' not activated in tenant. Activating...")
+                    activate_data = {
+                        "roleTemplateId": role_template_id
+                    }
+                    activate_url = f"{self.base_url}/directoryRoles"
+                    activate_response = requests.post(activate_url, headers=headers, json=activate_data)
+                    
+                    if activate_response.status_code not in [200, 201]:
+                        error_msg = f"Failed to activate role '{role_name}' in tenant: HTTP {activate_response.status_code}"
+                        logging.error(error_msg)
+                        return {"status": "error", "error": error_msg}
+                    
+                    logging.info(f"Successfully activated role '{role_name}' in tenant")
+                    # Get the activated role ID
+                    activated_response = requests.get(activated_roles_url, headers=headers)
+                    if activated_response.status_code == 200:
+                        activated_roles = activated_response.json().get("value", [])
+                        activated_role = next((role for role in activated_roles if role.get("roleTemplateId") == role_template_id), None)
+                        if activated_role:
+                            role_template_id = activated_role.get("id")
+                            logging.info(f"Using activated role ID: {role_template_id}")
+            
+            # Now assign the role to the user
+            assignment_url = f"{self.base_url}/directoryRoles/{role_template_id}/members/$ref"
+            
+            assignment_data = {
+                "@odata.id": f"{self.base_url}/users/{user_id}"
+            }
+            
+            logging.info(f"Assigning role '{role_name}' to user {user_id}")
+            logging.info(f"Assignment URL: {assignment_url}")
+            logging.info(f"Assignment data: {assignment_data}")
+            
+            assignment_response = requests.post(assignment_url, headers=headers, json=assignment_data)
+            
+            if assignment_response.status_code == 204:  # No Content is success for this endpoint
+                logging.info(f"Successfully assigned role '{role_name}' to user {user_id}")
+                return {"status": "success", "message": f"Role '{role_name}' assigned successfully"}
+            else:
+                error_msg = f"Failed to assign role: HTTP {assignment_response.status_code}"
+                try:
+                    error_details = assignment_response.json()
+                    error_msg += f" - {error_details.get('error', {}).get('message', 'Unknown error')}"
+                except:
+                    pass
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+                
+        except Exception as e:
+            error_msg = f"Failed to assign role: {str(e)}"
+            logging.error(error_msg)
+            return {"status": "error", "error": error_msg}
+
+    def assign_license(self, user_id, license_sku):
+        """Assign a license to a user via Microsoft Graph Beta API"""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.get_token()}",
+                "Content-Type": "application/json",
+            }
+            
+            # First, get available licenses from the tenant
+            licenses_url = f"{self.base_url}/subscribedSkus"
+            logging.info(f"Fetching available licenses for tenant {self.tenant_id}")
+            
+            licenses_response = requests.get(licenses_url, headers=headers)
+            if licenses_response.status_code != 200:
+                error_msg = f"Failed to fetch tenant licenses: HTTP {licenses_response.status_code}"
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+            
+            tenant_licenses = licenses_response.json().get("value", [])
+            target_license = None
+            
+            # Find the license by name or SKU ID
+            for license_info in tenant_licenses:
+                sku_id = license_info.get("skuId")
+                sku_part_number = license_info.get("skuPartNumber", "")
+                display_name = license_info.get("capabilityStatus", "")
+                
+                # Check if the input matches SKU ID, part number, or display name
+                if (license_sku.lower() == sku_id.lower() or 
+                    license_sku.lower() == sku_part_number.lower() or
+                    license_sku.lower() in display_name.lower()):
+                    target_license = license_info
+                    break
+            
+            if not target_license:
+                available_licenses = [l.get('skuPartNumber', l.get('skuId')) for l in tenant_licenses]
+                error_msg = f"License '{license_sku}' not found in tenant. Available licenses: {available_licenses}"
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+            
+            actual_sku_id = target_license.get("skuId")
+            logging.info(f"Found license: {target_license.get('skuPartNumber', actual_sku_id)} (SKU ID: {actual_sku_id})")
+            
+            # Microsoft Graph Beta API endpoint for license assignment
+            url = f"{self.base_url}/users/{user_id}/assignLicense"
+            
+            # License assignment payload
+            license_data = {
+                "addLicenses": [
+                    {
+                        "disabledPlans": [],  # No plans disabled
+                        "skuId": actual_sku_id
+                    }
+                ],
+                "removeLicenses": []  # No licenses to remove
+            }
+            
+            logging.info(f"Assigning license '{license_sku}' (SKU: {actual_sku_id}) to user {user_id}")
+            logging.info(f"License assignment URL: {url}")
+            logging.info(f"License data: {license_data}")
+            
+            response = requests.post(url, headers=headers, json=license_data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                logging.info(f"Successfully assigned license '{license_sku}' to user {user_id}")
+                return {"status": "success", "data": result}
+            else:
+                error_msg = f"Failed to assign license: HTTP {response.status_code}"
+                try:
+                    error_details = response.json()
+                    error_msg += f" - {error_details.get('error', {}).get('message', 'Unknown error')}"
+                except:
+                    pass
+                logging.error(error_msg)
+                return {"status": "error", "error": error_msg}
+                
+        except Exception as e:
+            error_msg = f"Failed to assign license: {str(e)}"
+            logging.error(error_msg)
+            return {"status": "error", "error": error_msg}
+
+
+
+

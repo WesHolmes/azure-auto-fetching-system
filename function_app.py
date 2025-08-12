@@ -3241,14 +3241,6 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
             "last_updated": datetime.now().isoformat()
         }
 
-        # Log the database record we're about to create
-        logging.info(f"=== DATABASE RECORD DEBUG ===")
-        logging.info(f"User record to be stored: {user_record}")
-        logging.info(f"Department value: '{user_record['department']}'")
-        logging.info(f"Job title value: '{user_record['job_title']}'")
-        logging.info(f"Office location value: '{user_record['office_location']}'")
-        logging.info(f"Mobile phone value: '{user_record['mobile_phone']}'")
-
         # Insert user into database
         try:
             upsert_many("usersV2", [user_record])

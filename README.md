@@ -128,7 +128,7 @@ curl -X POST http://localhost:7071/api/sync/serviceprincipals
 
 ## Database Schema
 
-### Users Table
+### Users Table (Legacy)
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -141,10 +141,38 @@ curl -X POST http://localhost:7071/api/sync/serviceprincipals
 | user_type | TEXT | Member or Guest |
 | department | TEXT | User's department |
 | job_title | TEXT | User's job title |
+| office_location | TEXT | User's office location |
+| mobile_phone | TEXT | User's mobile phone number |
 | last_sign_in | TEXT | Last sign-in timestamp |
 | synced_at | TEXT | Last sync timestamp |
 
 Primary Key: (id, tenant_id)
+
+### UsersV2 Table (Current)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| user_id | TEXT(50) | User object ID from Azure AD |
+| tenant_id | TEXT(50) | Tenant identifier |
+| user_principal_name | TEXT(255) | User's UPN (email) |
+| primary_email | TEXT(255) | User's primary email address |
+| display_name | TEXT(255) | User's display name |
+| department | TEXT(100) | User's department |
+| job_title | TEXT(100) | User's job title |
+| office_location | TEXT(100) | User's office location |
+| mobile_phone | TEXT(50) | User's mobile phone number |
+| account_type | TEXT(50) | Member or Guest |
+| account_enabled | INTEGER | Account status (1=enabled, 0=disabled) |
+| is_global_admin | INTEGER | Global admin status (1=yes, 0=no) |
+| is_mfa_compliant | INTEGER | MFA compliance (1=compliant, 0=not compliant) |
+| license_count | INTEGER | Number of assigned licenses |
+| group_count | INTEGER | Number of group memberships |
+| last_sign_in_date | TEXT | Last sign-in timestamp (ISO format) |
+| last_password_change | TEXT | Last password change timestamp (ISO format) |
+| created_at | TEXT | Record creation timestamp |
+| last_updated | TEXT | Last update timestamp |
+
+Primary Key: (user_id, tenant_id)
 
 ### Service Principals Table
 

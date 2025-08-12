@@ -1,6 +1,6 @@
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from core.graph_client import GraphClient
+from core.graph_beta_client import GraphBetaClient
 from core.databaseV2 import upsert_many, init_schema
 import logging
 
@@ -11,7 +11,7 @@ def fetch_directory_roles(tenant_id):
     """Fetch directory roles from Graph API"""
     try:
         logger.info(f"Starting directory roles fetch for tenant {tenant_id}")
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         roles = graph.get(
             "/directoryRoles",
@@ -34,7 +34,7 @@ def fetch_directory_roles(tenant_id):
 def fetch_role_members(tenant_id, role_id):
     """Fetch members of a specific directory role"""
     try:
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         members = graph.get(
             f"/directoryRoles/{role_id}/members",

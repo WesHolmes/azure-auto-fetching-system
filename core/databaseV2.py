@@ -53,6 +53,8 @@ def init_schema():
                 display_name TEXT(255),
                 department TEXT(100),
                 job_title TEXT(100),
+                office_location TEXT(100),
+                mobile_phone TEXT(50),
                 account_type TEXT(50),
                 account_enabled INTEGER NOT NULL DEFAULT 1,
                 is_global_admin INTEGER NOT NULL DEFAULT 0,

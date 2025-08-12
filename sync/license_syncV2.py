@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from core.graph_client import GraphClient
+from core.graph_beta_client import GraphBetaClient
 from core.databaseV2 import upsert_many, query, execute_query, init_schema
 
 logger = logging.getLogger(__name__)
@@ -10,7 +10,7 @@ def fetch_tenant_licenses(tenant_id):
     """Fetch tenant-level license information"""
     try:
         logger.info(f"Fetching tenant licenses for {tenant_id}")
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         # Test with no top parameter to see if that's the issue
         licenses = graph.get("/subscribedSkus")
@@ -29,7 +29,7 @@ def fetch_tenant_licenses(tenant_id):
 def fetch_user_license_details(tenant_id, user_id):
     """Fetch detailed license information for a specific user"""
     try:
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
         license_details = graph.get(
             f"/users/{user_id}/licenseDetails",
             select=["skuId", "skuPartNumber", "servicePlans"],
@@ -157,7 +157,7 @@ def sync_licenses(tenant_id, tenant_name):
 
         # Fetch ALL users with licenses (not just active ones)
         logger.info(f"Fetching user license assignments for {tenant_id}")
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         # Get all users, not filtered - include accountEnabled to detect inactive users
         all_users = graph.get(

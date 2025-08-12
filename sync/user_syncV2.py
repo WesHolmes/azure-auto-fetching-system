@@ -1,6 +1,6 @@
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from core.graph_client import GraphClient
+from core.graph_beta_client import GraphBetaClient
 from core.databaseV2 import upsert_many, init_schema
 import logging
 
@@ -11,7 +11,7 @@ def fetch_users(tenant_id):
     """Fetch users from Graph API"""
     try:
         logger.info(f"Starting user fetch for tenant {tenant_id}")
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         users = graph.get(
             "/users",
@@ -24,6 +24,8 @@ def fetch_users(tenant_id):
                 "userType",
                 "department",
                 "jobTitle",
+                "officeLocation",
+                "mobilePhone",
                 "signInActivity",
                 "createdDateTime",
                 "assignedLicenses",
@@ -46,7 +48,7 @@ def fetch_users(tenant_id):
 def fetch_user_groups(tenant_id, user_id):
     """Check if user is admin"""
     try:
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
         groups = graph.get(f"/users/{user_id}/memberOf", select=["id", "displayName"])
 
         # check for admin roles
@@ -69,7 +71,7 @@ def fetch_user_mfa_status(tenant_id):
     """Fetch MFA registration details for all users"""
     try:
         logger.info(f"Fetching MFA status for tenant {tenant_id}")
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         mfa_details = graph.get(
             "/reports/authenticationMethods/userRegistrationDetails",
@@ -217,6 +219,8 @@ def transform_user_records(users, tenant_id, mfa_lookup):
                 "display_name": display_name,
                 "department": user.get("department"),
                 "job_title": user.get("jobTitle"),
+                "office_location": user.get("officeLocation"),
+                "mobile_phone": user.get("mobilePhone"),
                 "account_type": user.get("userType"),
                 "account_enabled": 1 if user.get("accountEnabled") else 0,
                 "is_global_admin": 1 if is_admin else 0,
@@ -244,6 +248,8 @@ def transform_user_records(users, tenant_id, mfa_lookup):
                 "display_name": display_name,
                 "department": user.get("department"),
                 "job_title": user.get("jobTitle"),
+                "office_location": user.get("officeLocation"),
+                "mobile_phone": user.get("mobilePhone"),
                 "account_type": user.get("userType"),
                 "account_enabled": 1 if user.get("accountEnabled") else 0,
                 "is_global_admin": 0,

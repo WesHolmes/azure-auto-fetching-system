@@ -1,9 +1,9 @@
 import logging
 import azure.functions as func
-from core.graph_client import GraphClient
+# from core.graph_client import GraphClient
 from core.graph_beta_client import GraphBetaClient
 from core.tenant_manager import get_tenants
-from core.graph_client import GraphClient
+#from core.graph_client import GraphClient
 # from sync.user_sync import sync_users
 from sync.user_syncV2 import sync_users as sync_users_v2
 from sync.service_principal_sync import sync_service_principals
@@ -2977,6 +2977,20 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
         tenant_id = request_data.get("tenant_id")
         user_data = request_data.get("user_data")
 
+        # Add detailed logging for debugging
+        logging.info(f"=== USER CREATION DEBUG LOG ===")
+        logging.info(f"Full request data: {request_data}")
+        logging.info(f"Tenant ID: {tenant_id}")
+        logging.info(f"User data received: {user_data}")
+        logging.info(f"User data type: {type(user_data)}")
+        
+        # Log specific fields we're looking for
+        logging.info(f"Department field: '{user_data.get('department')}' (type: {type(user_data.get('department'))})")
+        logging.info(f"Job Title field: '{user_data.get('jobTitle')}' (type: {type(user_data.get('jobTitle'))})")
+        logging.info(f"Office Location field: '{user_data.get('officeLocation')}' (type: {type(user_data.get('officeLocation'))})")
+        logging.info(f"Mobile Phone field: '{user_data.get('mobilePhone')}' (type: {type(user_data.get('mobilePhone'))})")
+        logging.info(f"All user_data keys: {list(user_data.keys()) if user_data else 'None'}")
+
         if not tenant_id:
             return func.HttpResponse(
                 json.dumps({
@@ -3211,8 +3225,10 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
             "user_principal_name": created_user_data.get('userPrincipalName'),
             "primary_email": created_user_data.get('mail') or created_user_data.get('userPrincipalName'),
             "display_name": created_user_data.get('displayName'),
-            "department": created_user_data.get('department'),
-            "job_title": created_user_data.get('jobTitle'),
+            "department": user_data.get('department'),  # Use original request data
+            "job_title": user_data.get('jobTitle'),    # Use original request data
+            "office_location": user_data.get('officeLocation'),  # Use original request data
+            "mobile_phone": user_data.get('mobilePhone'),       # Use original request data
             "account_type": created_user_data.get('userType'),
             "account_enabled": 1 if created_user_data.get('accountEnabled', True) else 0,
             "is_global_admin": 0,  # New users are not global admins by default
@@ -3224,6 +3240,14 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
             "created_at": datetime.now().isoformat(),
             "last_updated": datetime.now().isoformat()
         }
+
+        # Log the database record we're about to create
+        logging.info(f"=== DATABASE RECORD DEBUG ===")
+        logging.info(f"User record to be stored: {user_record}")
+        logging.info(f"Department value: '{user_record['department']}'")
+        logging.info(f"Job title value: '{user_record['job_title']}'")
+        logging.info(f"Office location value: '{user_record['office_location']}'")
+        logging.info(f"Mobile phone value: '{user_record['mobile_phone']}'")
 
         # Insert user into database
         try:

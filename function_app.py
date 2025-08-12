@@ -698,6 +698,57 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
         admin_users = admin_users_result[0]["count"] if admin_users_result else 0
         never_signed_in = never_signed_in_result[0]["count"] if never_signed_in_result else 0
 
+        # fetch actual user data for the data field
+        users_query = """
+            SELECT 
+                user_id,
+                user_principal_name,
+                primary_email,
+                display_name,
+                department,
+                job_title,
+                office_location,
+                mobile_phone,
+                account_type,
+                account_enabled,
+                is_global_admin,
+                is_mfa_compliant,
+                license_count,
+                group_count,
+                last_sign_in_date,
+                last_password_change,
+                created_at,
+                last_updated
+            FROM usersV2 
+            WHERE tenant_id = ? 
+            ORDER BY display_name
+        """
+        users_result = query(users_query, (tenant_id,))
+        
+        # transform user data for frontend consumption
+        users_data = []
+        for user in users_result:
+            users_data.append({
+                "user_id": user["user_id"],
+                "user_principal_name": user["user_principal_name"],
+                "primary_email": user["primary_email"],
+                "display_name": user["display_name"],
+                "department": user["department"],
+                "job_title": user["job_title"],
+                "office_location": user["office_location"],
+                "mobile_phone": user["mobile_phone"],
+                "account_type": user["account_type"],
+                "account_enabled": bool(user["account_enabled"]),
+                "is_global_admin": bool(user["is_global_admin"]),
+                "is_mfa_compliant": bool(user["is_mfa_compliant"]),
+                "license_count": user["license_count"],
+                "group_count": user["group_count"],
+                "last_sign_in_date": user["last_sign_in_date"],
+                "last_password_change": user["last_password_change"],
+                "created_at": user["created_at"],
+                "last_updated": user["last_updated"]
+            })
+
         # generate user optimization actions
         actions = []
 
@@ -738,7 +789,7 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
         # build response structure
         response_data = {
             "success": True,
-            "data": [],  # empty for metadata endpoints
+            "data": users_data,  # now populated with actual user records
             "metadata": {
                 "tenant_id": tenant_id,
                 "tenant_name": tenant_name,

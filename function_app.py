@@ -825,6 +825,231 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
         )
 
 
+@app.route(route="tenant/users/edit", methods=["PATCH"])
+def edit_user(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP PATCH endpoint to edit an existing user account"""
+    
+    try:
+        # Parse request body
+        try:
+            request_data = req.get_json()
+        except Exception as e:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Invalid JSON in request body: {str(e)}"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Extract and validate required fields
+        tenant_id = request_data.get("tenant_id")
+        user_id = request_data.get("user_id")
+        user_updates = request_data.get("user_updates", {})
+
+        if not user_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "user_id is required in request body"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "tenant_id is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        if not user_updates:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "user_updates object is required"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Add detailed logging for debugging
+        logging.info(f"=== USER EDIT DEBUG LOG ===")
+        logging.info(f"Editing user ID: {user_id}")
+        logging.info(f"Tenant ID: {tenant_id}")
+        logging.info(f"User updates received: {user_updates}")
+        logging.info(f"All update keys: {list(user_updates.keys())}")
+
+        # Check if user exists and belongs to the specified tenant
+        existing_user_query = "SELECT * FROM usersV2 WHERE user_id = ? AND tenant_id = ?"
+        existing_user_result = query(existing_user_query, (user_id, tenant_id))
+
+        if not existing_user_result:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"User {user_id} not found in tenant {tenant_id}"
+                }),
+                status_code=404,
+                headers={"Content-Type": "application/json"}
+            )
+
+        existing_user = existing_user_result[0]
+        logging.info(f"Found existing user: {existing_user['display_name']}")
+
+        # Prepare update data for Graph API (only include fields that are being updated)
+        graph_update_data = {}
+        
+        # Map frontend field names to Graph API field names
+        field_mapping = {
+            'displayName': 'displayName',
+            'department': 'department',
+            'jobTitle': 'jobTitle',
+            'officeLocation': 'officeLocation',
+            'mobilePhone': 'mobilePhone'
+        }
+
+        for frontend_field, graph_field in field_mapping.items():
+            if frontend_field in user_updates and user_updates[frontend_field] is not None:
+                graph_update_data[graph_field] = user_updates[frontend_field]
+                logging.info(f"Will update {graph_field}: '{user_updates[frontend_field]}'")
+
+        if not graph_update_data:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "No valid fields to update"
+                }),
+                status_code=400,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Update user via Graph API
+        graph_client = GraphBetaClient(tenant_id)
+        logging.info(f"Updating user {user_id} via Graph API with data: {graph_update_data}")
+        
+        try:
+            update_result = graph_client.update_user(user_id, graph_update_data)
+        except Exception as graph_error:
+            error_msg = f"Graph API error: {str(graph_error)}"
+            logging.error(f"Failed to update user via Graph API: {error_msg}")
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to update user: {error_msg}"
+                }),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
+
+        if update_result.get('status') != 'success':
+            error_msg = update_result.get('error', 'Unknown error updating user')
+            logging.error(f"Failed to update user via Graph API: {error_msg}")
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to update user: {error_msg}"
+                }),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Update local database
+        update_fields = []
+        update_values = []
+        
+        # Map Graph API fields to database fields
+        db_field_mapping = {
+            'displayName': 'display_name',
+            'department': 'department',
+            'jobTitle': 'job_title',
+            'officeLocation': 'office_location',
+            'mobilePhone': 'mobile_phone'
+        }
+
+        for graph_field, db_field in db_field_mapping.items():
+            if graph_field in graph_update_data:
+                update_fields.append(f"{db_field} = ?")
+                update_values.append(graph_update_data[graph_field])
+
+        # Add timestamp and user_id for WHERE clause
+        update_values.append(datetime.now().isoformat())
+        update_values.append(user_id)
+        update_values.append(tenant_id)
+
+        # Build and execute update query
+        update_query = f"""
+            UPDATE usersV2 
+            SET {', '.join(update_fields)}, last_updated = ?
+            WHERE user_id = ? AND tenant_id = ?
+        """
+        
+        try:
+            execute_query(update_query, update_values)
+            logging.info(f"Successfully updated user {user_id} in database")
+        except Exception as db_error:
+            logging.warning(f"Graph API update succeeded but local DB update failed for user {user_id}: {str(db_error)}")
+            # Note: user is updated in Graph but local DB might be out of sync
+
+        # Fetch updated user data for response
+        updated_user_query = "SELECT * FROM usersV2 WHERE user_id = ? AND tenant_id = ?"
+        updated_user_result = query(updated_user_query, (user_id, tenant_id))
+        
+        if updated_user_result:
+            updated_user = updated_user_result[0]
+            # Transform to frontend-friendly format
+            response_user_data = {
+                "user_id": updated_user["user_id"],
+                "user_principal_name": updated_user["user_principal_name"],
+                "primary_email": updated_user["primary_email"],
+                "display_name": updated_user["display_name"],
+                "department": updated_user["department"],
+                "job_title": updated_user["job_title"],
+                "office_location": updated_user["office_location"],
+                "mobile_phone": updated_user["mobile_phone"],
+                "account_type": updated_user["account_type"],
+                "account_enabled": bool(updated_user["account_enabled"]),
+                "is_global_admin": bool(updated_user["is_global_admin"]),
+                "is_mfa_compliant": bool(updated_user["is_mfa_compliant"]),
+                "license_count": updated_user["license_count"],
+                "group_count": updated_user["group_count"],
+                "last_sign_in_date": updated_user["last_sign_in_date"],
+                "last_password_change": updated_user["last_password_change"],
+                "created_at": updated_user["created_at"],
+                "last_updated": updated_user["last_updated"]
+            }
+        else:
+            response_user_data = None
+
+        return func.HttpResponse(
+            json.dumps({
+                "success": True,
+                "message": f"User {existing_user['display_name']} updated successfully",
+                "data": response_user_data,
+                "updated_fields": list(graph_update_data.keys())
+            }),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+
+    except Exception as e:
+        error_msg = f"Error updating user: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
+
 @app.route(route="tenant/licenses", methods=["GET"])
 def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP GET endpoint for single tenant license data"""

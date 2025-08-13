@@ -1,8 +1,10 @@
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from core.graph_client import GraphClient
-from core.database import upsert_many
+from datetime import datetime
 import logging
+
+from core.database import upsert_many
+from core.graph_client import GraphClient
+
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +20,7 @@ def fetch_directory_roles(tenant_id):
             select=["id", "displayName", "description", "deletedDateTime"],
         )
 
-        logger.info(
-            f"Successfully fetched {len(roles)} directory roles for tenant {tenant_id}"
-        )
+        logger.info(f"Successfully fetched {len(roles)} directory roles for tenant {tenant_id}")
         return roles
 
     except Exception as e:
@@ -44,9 +44,7 @@ def fetch_role_members(tenant_id, role_id):
         return members
 
     except Exception as e:
-        logger.error(
-            f"Failed to fetch members for role {role_id} in tenant {tenant_id}: {str(e)}"
-        )
+        logger.error(f"Failed to fetch members for role {role_id} in tenant {tenant_id}: {str(e)}")
         return []
 
 
@@ -61,11 +59,7 @@ def transform_role_data(roles, tenant_id):
         # use ThreadPoolExecutor to fetch role members concurrently
         with ThreadPoolExecutor(max_workers=10) as executor:
             # submit all role member fetch tasks
-            future_to_role = {
-                executor.submit(fetch_role_members, tenant_id, role["id"]): role
-                for role in roles
-                if role.get("id")
-            }
+            future_to_role = {executor.submit(fetch_role_members, tenant_id, role["id"]): role for role in roles if role.get("id")}
 
             # process completed futures
             for future in as_completed(future_to_role):
@@ -74,11 +68,7 @@ def transform_role_data(roles, tenant_id):
                     members = future.result()
 
                     # Count user members for this role
-                    user_members = [
-                        m
-                        for m in members
-                        if m.get("@odata.type") == "#microsoft.graph.user"
-                    ]
+                    user_members = [m for m in members if m.get("@odata.type") == "#microsoft.graph.user"]
                     member_count = len(user_members)
 
                     # Create role record
@@ -106,14 +96,10 @@ def transform_role_data(roles, tenant_id):
                         user_role_records.append(user_role_record)
 
                 except Exception as e:
-                    logger.error(
-                        f"Failed to process role {role.get('displayName', 'Unknown')}: {str(e)}"
-                    )
+                    logger.error(f"Failed to process role {role.get('displayName', 'Unknown')}: {str(e)}")
                     continue
 
-        logger.info(
-            f"Transformed {len(role_records)} roles and {len(user_role_records)} user role assignments for tenant {tenant_id}"
-        )
+        logger.info(f"Transformed {len(role_records)} roles and {len(user_role_records)} user role assignments for tenant {tenant_id}")
         return role_records, user_role_records
 
     except Exception as e:
@@ -162,17 +148,13 @@ def sync_roles(tenant_id):
         # Insert new user role assignments
         if user_role_records:
             upsert_many("user_roles", user_role_records)
-            logger.info(
-                f"Successfully stored {len(user_role_records)} user role assignments"
-            )
+            logger.info(f"Successfully stored {len(user_role_records)} user role assignments")
 
         if not role_records and not user_role_records:
             logger.warning(f"No role data to store for tenant {tenant_id}")
 
         duration = (datetime.utcnow() - start_time).total_seconds()
-        logger.info(
-            f"Role sync completed for tenant {tenant_id} in {duration:.2f} seconds"
-        )
+        logger.info(f"Role sync completed for tenant {tenant_id} in {duration:.2f} seconds")
 
         return {
             "status": "completed",
@@ -184,9 +166,7 @@ def sync_roles(tenant_id):
 
     except Exception as e:
         duration = (datetime.utcnow() - start_time).total_seconds()
-        logger.error(
-            f"Role sync failed for tenant {tenant_id}: {str(e)}", exc_info=True
-        )
+        logger.error(f"Role sync failed for tenant {tenant_id}: {str(e)}", exc_info=True)
         return {
             "status": "error",
             "tenant_id": tenant_id,
@@ -205,10 +185,7 @@ def sync_roles_for_tenants(tenant_ids):
 
         # Use ThreadPoolExecutor for concurrent tenant processing
         with ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_tenant = {
-                executor.submit(sync_roles, tenant_id): tenant_id
-                for tenant_id in tenant_ids
-            }
+            future_to_tenant = {executor.submit(sync_roles, tenant_id): tenant_id for tenant_id in tenant_ids}
 
             for future in as_completed(future_to_tenant):
                 tenant_id = future_to_tenant[future]
@@ -221,9 +198,7 @@ def sync_roles_for_tenants(tenant_ids):
                             f"  Tenant {tenant_id}: {result['roles_synced']} roles, {result['user_roles_synced']} role assignments synced"
                         )
                     else:
-                        logger.error(
-                            f"  Tenant {tenant_id}: {result.get('error', 'Unknown error')}"
-                        )
+                        logger.error(f"  Tenant {tenant_id}: {result.get('error', 'Unknown error')}")
 
                 except Exception as e:
                     logger.error(f"  Tenant {tenant_id}: {str(e)}")
@@ -244,9 +219,7 @@ def sync_roles_for_tenants(tenant_ids):
         total_roles = sum(r.get("roles_synced", 0) for r in successful)
         total_role_assignments = sum(r.get("user_roles_synced", 0) for r in successful)
 
-        logger.info(
-            f"Role sync summary: {len(successful)} successful, {len(failed)} failed"
-        )
+        logger.info(f"Role sync summary: {len(successful)} successful, {len(failed)} failed")
         logger.info(f"Total roles synced: {total_roles}")
         logger.info(f"Total role assignments synced: {total_role_assignments}")
         logger.info(f"Total duration: {duration:.2f} seconds")

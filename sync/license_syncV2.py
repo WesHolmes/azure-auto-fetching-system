@@ -1,7 +1,9 @@
+from datetime import UTC, datetime, timedelta
 import logging
-from datetime import datetime, timedelta, timezone
+
+from core.databaseV2 import execute_query, init_schema, query, upsert_many
 from core.graph_beta_client import GraphBetaClient
-from core.databaseV2 import upsert_many, query, execute_query, init_schema
+
 
 logger = logging.getLogger(__name__)
 
@@ -110,10 +112,10 @@ def get_sku_display_name(sku_part_number: str) -> str:
 
 def sync_licenses(tenant_id, tenant_name):
     """Sync both tenant licenses and user license assignments"""
-    
+
     # Initialize database schema
     init_schema()
-    
+
     try:
         logger.info(f"Starting license sync for {tenant_name}")
 
@@ -127,9 +129,7 @@ def sync_licenses(tenant_id, tenant_name):
             license_records = []
             for lic in tenant_licenses:
                 prepaid_units = lic.get("prepaidUnits", {})
-                total_units = prepaid_units.get("enabled", 0) + prepaid_units.get(
-                    "lockedOut", 0
-                )
+                total_units = prepaid_units.get("enabled", 0) + prepaid_units.get("lockedOut", 0)
                 sku_part_number = lic.get("skuPartNumber", "")
 
                 license_data = {
@@ -137,9 +137,7 @@ def sync_licenses(tenant_id, tenant_name):
                     "license_id": lic.get("skuId"),
                     "license_display_name": get_sku_display_name(sku_part_number),
                     "license_partnumber": sku_part_number,
-                    "status": "active"
-                    if lic.get("capabilityStatus") == "Enabled"
-                    else "inactive",
+                    "status": "active" if lic.get("capabilityStatus") == "Enabled" else "inactive",
                     "total_count": total_units,
                     "consumed_count": lic.get("consumedUnits", 0),
                     "warning_count": prepaid_units.get("warning", 0),
@@ -197,11 +195,7 @@ def sync_licenses(tenant_id, tenant_name):
                     user_license_detail = license_detail_lookup.get(sku_id, {})
 
                     # Use SKU part number from user details if available
-                    sku_part_number = (
-                        user_license_detail.get("skuPartNumber")
-                        or license_info.get("license_partnumber")
-                        or "UNKNOWN"
-                    )
+                    sku_part_number = user_license_detail.get("skuPartNumber") or license_info.get("license_partnumber") or "UNKNOWN"
 
                     # Determine if license should be considered active
                     # Consider inactive if:
@@ -228,12 +222,8 @@ def sync_licenses(tenant_id, tenant_name):
                             last_sign_in = user_activity[0].get("last_sign_in_date")
                             if last_sign_in:
                                 try:
-                                    last_signin_date = datetime.fromisoformat(
-                                        last_sign_in
-                                    )
-                                    cutoff_date = datetime.now(
-                                        timezone.utc
-                                    ) - timedelta(days=90)
+                                    last_signin_date = datetime.fromisoformat(last_sign_in)
+                                    cutoff_date = datetime.now(UTC) - timedelta(days=90)
 
                                     if last_signin_date < cutoff_date:
                                         # User hasn't signed in for 90+ days - consider license inactive
@@ -263,9 +253,7 @@ def sync_licenses(tenant_id, tenant_name):
         # Store user licenses
         if user_license_records:
             upsert_many("user_licensesV2", user_license_records)
-            logger.info(
-                f"Stored {len(user_license_records)} user license assignments from {users_with_licenses} users"
-            )
+            logger.info(f"Stored {len(user_license_records)} user license assignments from {users_with_licenses} users")
 
         # Check for users who previously had licenses but no longer have assignments
         # This catches users who were disabled and had their licenses removed by Microsoft
@@ -278,9 +266,7 @@ def sync_licenses(tenant_id, tenant_name):
             (tenant_id,),
         )
 
-        current_user_ids = {
-            user.get("id") for user in all_users if user.get("assignedLicenses")
-        }
+        current_user_ids = {user.get("id") for user in all_users if user.get("assignedLicenses")}
 
         # Find users who had licenses before but don't now (likely disabled)
         users_to_check = []
@@ -316,15 +302,11 @@ def sync_licenses(tenant_id, tenant_name):
                             tenant_id,
                         ),
                     )
-                    logger.info(
-                        f"Marked licenses as inactive for disabled user: {user_status['user_principal_name']}"
-                    )
+                    logger.info(f"Marked licenses as inactive for disabled user: {user_status['user_principal_name']}")
 
         return {
             "status": "success",
-            "licenses_synced": len(license_records)
-            if "license_records" in locals()
-            else 0,
+            "licenses_synced": len(license_records) if "license_records" in locals() else 0,
             "user_licenses_synced": len(user_license_records),
             "inactive_licenses_updated": len(users_to_check) if users_to_check else 0,
         }

@@ -1,9 +1,11 @@
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from core.graph_client import GraphClient
-from core.graph_beta_client import GraphBetaClient
-from core.database import upsert_many
+from datetime import datetime
 import logging
+
+from core.database import upsert_many
+from core.graph_beta_client import GraphBetaClient
+from core.graph_client import GraphClient
+
 
 logger = logging.getLogger(__name__)
 
@@ -12,13 +14,7 @@ def fetch_owners_for_sp(graph, sp_id):
     """Fetch owners for a single service principal"""
     try:
         owners = graph.get(f"/servicePrincipals/{sp_id}/owners")
-        return (
-            ",".join(
-                [owner.get("displayName", owner.get("id", "")) for owner in owners]
-            )
-            if owners
-            else None
-        )
+        return ",".join([owner.get("displayName", owner.get("id", "")) for owner in owners]) if owners else None
     except Exception as e:
         logger.warning(f"Failed to get owners for SP {sp_id}: {e}")
         return None
@@ -41,19 +37,14 @@ def fetch_service_principals_with_owners(tenant_id):
         ],
     )
 
-    logger.info(
-        f"Found {len(service_principals)} service principals for tenant {tenant_id}"
-    )
+    logger.info(f"Found {len(service_principals)} service principals for tenant {tenant_id}")
 
     # Use ThreadPoolExecutor to fetch owners concurrently
     max_workers = 20  # Limit concurrent requests to avoid rate limiting
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all owner fetch tasks
-        future_to_sp = {
-            executor.submit(fetch_owners_for_sp, graph, sp["id"]): sp
-            for sp in service_principals
-        }
+        future_to_sp = {executor.submit(fetch_owners_for_sp, graph, sp["id"]): sp for sp in service_principals}
 
         # Process completed tasks
         for future in as_completed(future_to_sp):
@@ -146,9 +137,7 @@ def transform_service_principals(service_principals, tenant_id, signin_lookup):
         key_creds = sp.get("keyCredentials", [])
 
         # Get credential expiration and type info
-        credential_exp_date, credential_type = get_credential_info(
-            password_creds, key_creds
-        )
+        credential_exp_date, credential_type = get_credential_info(password_creds, key_creds)
 
         record = {
             "id": sp["id"],
@@ -179,9 +168,7 @@ def sync_service_principals(tenant_id, tenant_name):
         signin_lookup = fetch_signin_data(tenant_id)
 
         # Transform to database format
-        records = transform_service_principals(
-            service_principals, tenant_id, signin_lookup
-        )
+        records = transform_service_principals(service_principals, tenant_id, signin_lookup)
 
         # Store in database
         upsert_many("service_principals", records)
@@ -230,9 +217,7 @@ if __name__ == "__main__":
         results.append(result)
 
         if result["status"] == "success":
-            logger.info(
-                f"✓ {tenant['name']}: {result['service_principals_synced']} SPs synced in {result['sync_time_seconds']:.2f}s"
-            )
+            logger.info(f"✓ {tenant['name']}: {result['service_principals_synced']} SPs synced in {result['sync_time_seconds']:.2f}s")
         else:
             logger.error(f"✗ {tenant['name']}: {result['error']}")
 

@@ -1,8 +1,10 @@
-import time
-import requests
-import msal
-import os
 import logging
+import os
+import time
+
+import msal
+import requests
+
 
 # Note: time.sleep() is acceptable here because:
 # 1. Azure Functions handles scaling automatically
@@ -32,18 +34,14 @@ class GraphClient:
             client_credential=self.client_secret,
         )
 
-        result = app.acquire_token_for_client(
-            scopes=["https://graph.microsoft.com/.default"]
-        )
+        result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
 
         if "access_token" in result:
             self.token = result["access_token"]
             self.token_expires = time.time() + result.get("expires_in", 3600) - 300
             return self.token
         else:
-            raise Exception(
-                f"Token acquisition failed: {result.get('error', 'Unknown error')}"
-            )
+            raise Exception(f"Token acquisition failed: {result.get('error', 'Unknown error')}")
 
     def get(
         self,
@@ -120,9 +118,7 @@ class GraphClient:
                 retry_count = getattr(self, "_retry_count", 0)
                 self._retry_count = retry_count + 1
                 wait_time = min(30, 5 * (2**retry_count))  # Max 30 seconds
-                logging.info(
-                    f"Waiting {wait_time} seconds before retry #{self._retry_count}"
-                )
+                logging.info(f"Waiting {wait_time} seconds before retry #{self._retry_count}")
                 time.sleep(wait_time)
                 continue
 

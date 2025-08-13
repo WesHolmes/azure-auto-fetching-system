@@ -1,8 +1,10 @@
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from core.graph_beta_client import GraphBetaClient
-from core.databaseV2 import upsert_many, init_schema
+from datetime import datetime
 import logging
+
+from core.databaseV2 import init_schema, upsert_many
+from core.graph_beta_client import GraphBetaClient
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +41,7 @@ def fetch_users(tenant_id):
         return users
 
     except Exception as e:
-        logger.error(
-            f"Failed to fetch users for tenant {tenant_id}: {str(e)}", exc_info=True
-        )
+        logger.error(f"Failed to fetch users for tenant {tenant_id}: {str(e)}", exc_info=True)
         raise
 
 
@@ -53,13 +53,7 @@ def fetch_user_groups(tenant_id, user_id):
 
         # check for admin roles
         admin_keywords = ["admin", "administrator", "global"]
-        is_admin = any(
-            any(
-                keyword in group.get("displayName", "").lower()
-                for keyword in admin_keywords
-            )
-            for group in groups
-        )
+        is_admin = any(any(keyword in group.get("displayName", "").lower() for keyword in admin_keywords) for group in groups)
         return is_admin, len(groups)
 
     except Exception as e:
@@ -110,10 +104,7 @@ def fetch_user_groups_batch(tenant_id, user_ids):
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all group fetch tasks
-        future_to_user = {
-            executor.submit(fetch_single_user_groups, user_id): user_id
-            for user_id in user_ids
-        }
+        future_to_user = {executor.submit(fetch_single_user_groups, user_id): user_id for user_id in user_ids}
 
         # Process completed tasks
         for future in as_completed(future_to_user):
@@ -142,9 +133,7 @@ def transform_user_records(users, tenant_id, mfa_lookup):
     # Fetch all user groups concurrently
     logger.info("Fetching group memberships for all users concurrently...")
     group_results = fetch_user_groups_batch(tenant_id, user_ids)
-    logger.info(
-        f"Completed group fetching in {(datetime.now() - start_time).total_seconds():.1f}s"
-    )
+    logger.info(f"Completed group fetching in {(datetime.now() - start_time).total_seconds():.1f}s")
 
     for i, user in enumerate(users, 1):
         user_id = user.get("id")
@@ -156,9 +145,7 @@ def transform_user_records(users, tenant_id, mfa_lookup):
             elapsed = (datetime.now() - start_time).total_seconds()
             rate = i / elapsed
             eta = (len(users) - i) / rate
-            logger.info(
-                f"Processing user {i}/{len(users)} - Elapsed: {elapsed:.1f}s, ETA: {eta:.1f}s"
-            )
+            logger.info(f"Processing user {i}/{len(users)} - Elapsed: {elapsed:.1f}s, ETA: {eta:.1f}s")
 
         try:
             # Get last sign-in
@@ -198,19 +185,17 @@ def transform_user_records(users, tenant_id, mfa_lookup):
                             }
                             license_records.append(user_license_record)
                 except Exception as e:
-                    logger.warning(
-                        f"Could not process licenses for user {user_id}: {str(e)}"
-                    )
+                    logger.warning(f"Could not process licenses for user {user_id}: {str(e)}")
 
             # Handle primary_email (required field)
             primary_email = user.get("mail") or upn or "unknown@domain.com"
-            
+
             # Get password change date
             last_password_change = user.get("lastPasswordChangeDateTime")
-            
+
             # Get created date
             created_at = user.get("createdDateTime") or datetime.now().isoformat()
-            
+
             record = {
                 "user_id": user_id,
                 "tenant_id": tenant_id,
@@ -239,7 +224,7 @@ def transform_user_records(users, tenant_id, mfa_lookup):
             # Add basic record
             primary_email = user.get("mail") or upn or "unknown@domain.com"
             created_at = user.get("createdDateTime") or datetime.now().isoformat()
-            
+
             basic_record = {
                 "user_id": user_id,
                 "tenant_id": tenant_id,
@@ -263,9 +248,7 @@ def transform_user_records(users, tenant_id, mfa_lookup):
             }
             records.append(basic_record)
 
-    logger.info(
-        f"Transformation complete: {len(records)} users, {len(license_records)} licenses"
-    )
+    logger.info(f"Transformation complete: {len(records)} users, {len(license_records)} licenses")
     return records, license_records  # Return both values
 
 
@@ -296,9 +279,7 @@ def sync_users(tenant_id, tenant_name):
         mfa_lookup = fetch_user_mfa_status(tenant_id)
 
         # transform data
-        user_records, user_license_records = transform_user_records(
-            users, tenant_id, mfa_lookup
-        )
+        user_records, user_license_records = transform_user_records(users, tenant_id, mfa_lookup)
 
         # store in database with error handling
         users_stored = 0
@@ -309,19 +290,13 @@ def sync_users(tenant_id, tenant_name):
                 users_stored = upsert_many("usersV2", user_records)
                 logger.info(f"Stored {users_stored} users for {tenant_name}")
         except Exception as e:
-            logger.error(
-                f"Failed to store users for {tenant_name}: {str(e)}", exc_info=True
-            )
+            logger.error(f"Failed to store users for {tenant_name}: {str(e)}", exc_info=True)
             raise
 
         try:
             if user_license_records:
-                user_licenses_stored = upsert_many(
-                    "user_licensesV2", user_license_records
-                )
-                logger.info(
-                    f"Stored {user_licenses_stored} user licenses for {tenant_name}"
-                )
+                user_licenses_stored = upsert_many("user_licensesV2", user_license_records)
+                logger.info(f"Stored {user_licenses_stored} user licenses for {tenant_name}")
         except Exception as e:
             logger.error(
                 f"Failed to store user licenses for {tenant_name}: {str(e)}",
@@ -330,10 +305,7 @@ def sync_users(tenant_id, tenant_name):
             # Don't raise here - users were stored successfully
 
         duration = (datetime.now() - start_time).total_seconds()
-        logger.info(
-            f"Completed user sync for {tenant_name}: "
-            f"{users_stored} users, {user_licenses_stored} user licenses in {duration:.1f}s"
-        )
+        logger.info(f"Completed user sync for {tenant_name}: {users_stored} users, {user_licenses_stored} user licenses in {duration:.1f}s")
 
         return {
             "status": "success",
@@ -346,9 +318,7 @@ def sync_users(tenant_id, tenant_name):
 
     except Exception as e:
         duration = (datetime.now() - start_time).total_seconds()
-        error_msg = (
-            f"User sync failed for {tenant_name} after {duration:.1f}s: {str(e)}"
-        )
+        error_msg = f"User sync failed for {tenant_name} after {duration:.1f}s: {str(e)}"
         logger.error(error_msg, exc_info=True)
 
         return {

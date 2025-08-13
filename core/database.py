@@ -1,6 +1,7 @@
+import logging
 import os
 import sqlite3
-import logging
+
 
 logger = logging.getLogger(__name__)
 
@@ -179,36 +180,16 @@ def init_schema():
         )
 
         # Basic indexes only
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_licenses_tenant ON licenses(tenant_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_user_licenses_tenant ON user_licenses(tenant_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_roles_tenant ON roles(tenant_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_user_roles_tenant ON user_roles(tenant_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_policies_tenant ON policies(tenant_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_policy_users_tenant ON policy_users(tenant_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_policy_users_policy ON policy_users(policy_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_policy_applications_tenant ON policy_applications(tenant_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_policy_applications_policy ON policy_applications(policy_id)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_licenses_tenant ON licenses(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_licenses_tenant ON user_licenses(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_roles_tenant ON roles(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_roles_tenant ON user_roles(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_policies_tenant ON policies(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_users_tenant ON policy_users(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_users_policy ON policy_users(policy_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_applications_tenant ON policy_applications(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_applications_policy ON policy_applications(policy_id)")
 
         conn.commit()
         logger.info("Database schema initialized")

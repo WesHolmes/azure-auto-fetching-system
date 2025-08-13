@@ -1638,8 +1638,8 @@ def disable_user(req: func.HttpRequest) -> func.HttpResponse:
             execute_query(update_query, (current_time, tenant_id, user["user_id"]))
             logging.info(f"Updated local database for user {user['user_principal_name']}")
         except Exception as db_error:
-            logging.error(f"Failed to update local database: {str(db_error)}")
-            # note: user is disabled in Graph but local DB might be out of sync
+            logging.warning(f"Graph API update succeeded but local DB update failed for user {user_id}: {str(db_error)}")
+            # Note: user is updated in Graph but local DB might be out of sync
 
         # return success response
         response_data = {
@@ -1680,6 +1680,13 @@ def disable_user(req: func.HttpRequest) -> func.HttpResponse:
             headers={"Content-Type": "application/json"},
         )
 
+    except Exception as e:
+        error_msg = f"Error updating user: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(
+            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
+        )
+
 
 @app.route(route="tenant/users/disable-all", methods=["PATCH"])
 def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
@@ -1701,7 +1708,6 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
         # get parameters from request
         tenant_id = req_body.get("tenant_id")
         inactivity_threshold_days = req_body.get("inactivity_threshold_days", 90)
-        dry_run = req_body.get("dry_run", False)
 
         # validate required parameters
         if not tenant_id:
@@ -1724,7 +1730,7 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
 
         tenant_name = tenant_names[tenant_id]
         execution_time = datetime.now().isoformat()
-        logging.info(f"Processing bulk disable for tenant: {tenant_name} (dry_run: {dry_run})")
+        # logging.info(f"Processing bulk disable for tenant: {tenant_name} (dry_run: {dry_run})")
 
         # use existing analysis function to get potential savings
         inactive_analysis = calculate_inactive_users(tenant_id, inactivity_threshold_days)
@@ -1769,7 +1775,6 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
                             "tenant_id": tenant_id,
                             "tenant_name": tenant_name,
                             "operation": "bulk_disable_inactive_users",
-                            "dry_run": dry_run,
                             "inactivity_threshold_days": inactivity_threshold_days,
                             "execution_time": execution_time,
                             "summary": {
@@ -1795,8 +1800,8 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
         counters = {"successfully_disabled": 0, "already_disabled": 0, "failed": 0, "skipped": 0}
 
         # initialize Graph client (only if not dry run)
-        if not dry_run:
-            graph_client = GraphBetaClient(tenant_id)
+
+        graph_client = GraphBetaClient(tenant_id)
 
         # process each inactive user
         for user in inactive_users:
@@ -1822,14 +1827,6 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
                     processed_users.append(user_data)
                     continue
 
-                if dry_run:
-                    # dry run mode - just simulate
-                    user_data["status"] = "would_be_disabled"
-                    user_data["note"] = "Dry run - no actual changes made"
-                    counters["successfully_disabled"] += 1
-                    processed_users.append(user_data)
-                    logging.info(f"DRY RUN: Would disable user {user_principal_name}")
-                else:
                     # actually disable the user via Graph API
                     logging.info(f"Disabling user {user_principal_name} via Graph API")
                     disable_result = graph_client.disable_user(user_id)
@@ -1918,7 +1915,6 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
                 "tenant_id": tenant_id,
                 "tenant_name": tenant_name,
                 "operation": "bulk_disable_inactive_users",
-                "dry_run": dry_run,
                 "inactivity_threshold_days": inactivity_threshold_days,
                 "execution_time": execution_time,
                 "summary": {
@@ -3564,6 +3560,257 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             json.dumps(
                 {"success": False, "error": error_msg, "metadata": {"operation": "delete_user", "timestamp": datetime.now().isoformat()}}
+            ),
+            status_code=500,
+            headers={"Content-Type": "application/json"},
+        )
+
+
+@app.route(route="users/bulk-disable", methods=["POST"])
+def disable_users_bulk(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP POST endpoint to disable multiple selected users for a tenant"""
+    # single tenant, multiple resource operation
+
+    from datetime import datetime
+
+    try:
+        # extract and validate request data
+        logging.info("Processing bulk user disable request for selected users")
+
+        req_body = req.get_json()
+        if not req_body:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "Request body is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # get parameters from request
+        tenant_id = req_body.get("tenant_id")
+        user_ids = req_body.get("user_ids", [])
+        # dry_run = req_body.get("dry_run", False)  # Commented out for production testing
+
+        # validate required parameters
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "tenant_id is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if not user_ids or not isinstance(user_ids, list):
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_ids array is required and must be a list"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if len(user_ids) == 0:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_ids array cannot be empty"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        execution_time = datetime.now().isoformat()
+        logging.info(f"Processing bulk disable for {len(user_ids)} selected users in tenant: {tenant_name}")
+
+        # get user details for the selected user IDs
+        user_ids_str = ",".join(["?" for _ in user_ids])
+        users_query = f"""
+        SELECT user_id, display_name, user_principal_name, last_sign_in_date, account_enabled
+        FROM usersV2
+        WHERE tenant_id = ? AND user_id IN ({user_ids_str})
+        """
+        query_params = [tenant_id] + user_ids
+        selected_users = query(users_query, query_params)
+
+        if not selected_users:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "None of the specified user IDs were found in the tenant"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if all requested users were found
+        found_user_ids = {user["user_id"] for user in selected_users}
+        missing_user_ids = set(user_ids) - found_user_ids
+        if missing_user_ids:
+            logging.warning(f"Some user IDs not found: {missing_user_ids}")
+
+        # initialize tracking variables
+        processed_users = []
+        counters = {"successfully_disabled": 0, "already_disabled": 0, "failed": 0, "skipped": 0}
+
+        # initialize Graph client (only if not dry run)
+
+        graph_client = GraphBetaClient(tenant_id)
+
+        # process each selected user
+        for user in selected_users:
+            user_id = user["user_id"]
+            user_principal_name = user["user_principal_name"]
+            display_name = user.get("display_name")
+            last_sign_in = user.get("last_sign_in_date")
+
+            user_data = {
+                "user_id": user_id,
+                "user_principal_name": user_principal_name,
+                "display_name": display_name,
+                "last_sign_in": last_sign_in,
+            }
+
+            try:
+                # check if user is already disabled
+                if not user.get("account_enabled", True):
+                    user_data["status"] = "already_disabled"
+                    user_data["note"] = "User was already disabled"
+                    counters["already_disabled"] += 1
+                    processed_users.append(user_data)
+                    logging.info(f"User {user_principal_name} already disabled, skipping")
+                    continue
+
+                else:
+                    # actually disable the user via Graph API
+                    logging.info(f"Disabling user {user_principal_name} via Graph API")
+                    disable_result = graph_client.disable_user(user_id)
+
+                    if disable_result.get("status") != "success":
+                        error_msg = disable_result.get("error", "Unknown error disabling user")
+                        user_data["status"] = "failed"
+                        user_data["error"] = error_msg
+                        counters["failed"] += 1
+                        processed_users.append(user_data)
+                        logging.error(f"Failed to disable {user_principal_name}: {error_msg}")
+                        continue
+
+                    # update local database to reflect disabled status
+                    current_time = datetime.now().isoformat()
+                    update_query = "UPDATE usersV2 SET account_enabled = 0, last_updated = ? WHERE tenant_id = ? AND user_id = ?"
+
+                    try:
+                        execute_query(update_query, (current_time, tenant_id, user_id))
+                        logging.info(f"Updated local database for user {user_principal_name}")
+                    except Exception as db_error:
+                        logging.warning(
+                            f"Graph API disable succeeded but local DB update failed for {user_principal_name}: {str(db_error)}"
+                        )
+                        # note: user is disabled in Graph but local DB might be out of sync
+
+                    user_data["status"] = "disabled"
+                    user_data["disabled_at"] = current_time
+                    counters["successfully_disabled"] += 1
+                    processed_users.append(user_data)
+                    logging.info(f"Successfully disabled user {user_principal_name}")
+
+            except Exception as e:
+                error_msg = f"Error processing user {user_principal_name}: {str(e)}"
+                user_data["status"] = "failed"
+                user_data["error"] = error_msg
+                counters["failed"] += 1
+                processed_users.append(user_data)
+                logging.error(error_msg)
+
+        # build actions array based on results
+        actions = []
+
+        if counters["failed"] > 0:
+            actions.append(
+                {
+                    "type": "review_failures",
+                    "description": f"{counters['failed']} user(s) failed to disable - review permissions",
+                    "users_affected": counters["failed"],
+                }
+            )
+
+        if counters["successfully_disabled"] > 0:
+            actions.append(
+                {
+                    "type": "verify_disabled",
+                    "description": f"{counters['successfully_disabled']} user(s) successfully disabled",
+                    "users_affected": counters["successfully_disabled"],
+                }
+            )
+
+        if counters["already_disabled"] > 0:
+            actions.append(
+                {
+                    "type": "review_already_disabled",
+                    "description": f"{counters['already_disabled']} user(s) were already disabled",
+                    "users_affected": counters["already_disabled"],
+                }
+            )
+
+        # determine HTTP status code
+        if counters["failed"] == 0 and counters["successfully_disabled"] > 0:
+            status_code = 200  # Complete success - all users disabled
+        elif counters["failed"] > 0 and counters["successfully_disabled"] > 0:
+            status_code = 207  # Multi-status - mixed results
+        else:
+            status_code = 500  # All failed
+
+        # determine overall success status
+        success_status = counters["failed"] == 0 or counters["successfully_disabled"] > 0
+
+        # build final response
+        response_data = {
+            "success": success_status,
+            "data": processed_users,
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "operation": "bulk_disable_selected_users",
+                # "dry_run": dry_run,  # Commented out for production testing
+                "execution_time": execution_time,
+                "summary": {
+                    "total_requested": len(user_ids),
+                    "total_found": len(selected_users),
+                    "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
+                    "successfully_disabled": counters["successfully_disabled"],
+                    "already_disabled": counters["already_disabled"],
+                    "failed": counters["failed"],
+                    "skipped": counters["skipped"],
+                },
+            },
+            "actions": actions,
+        }
+
+        logging.info(f"Bulk disable operation completed. Summary: {counters}")
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=status_code,
+            headers={"Content-Type": "application/json"},
+        )
+
+    except Exception as e:
+        error_msg = f"Error in bulk disable operation: {str(e)}"
+        logging.error(error_msg)
+
+        return func.HttpResponse(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": error_msg,
+                    "data": [],
+                    "metadata": {
+                        "tenant_id": req_body.get("tenant_id") if "req_body" in locals() else None,
+                        "operation": "bulk_disable_selected_users",
+                        "execution_time": datetime.now().isoformat(),
+                    },
+                    "actions": [],
+                }
             ),
             status_code=500,
             headers={"Content-Type": "application/json"},

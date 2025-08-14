@@ -1,0 +1,46 @@
+@app.route(route="sync/devices", methods=["POST"])
+def devices_sync_http(req: func.HttpRequest) -> func.HttpResponse:
+    tenants = get_tenants()
+    total_devices = 0
+    total_managed = 0
+    total_azure_ad = 0
+    results = []
+
+    for tenant in tenants:
+        try:
+            result = sync_devices_v2(tenant["tenant_id"], tenant["name"])
+            if result["status"] == "success":
+                total_devices += result["devices_synced"]
+                total_managed += result["managed_devices_synced"]
+                total_azure_ad += result["azure_ad_devices_synced"]
+                results.append(
+                    {
+                        "status": "completed",
+                        "tenant_id": tenant["tenant_id"],
+                        "devices_synced": result["devices_synced"],
+                        "managed_devices_synced": result["managed_devices_synced"],
+                        "azure_ad_devices_synced": result["azure_ad_devices_synced"],
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "status": "error",
+                        "tenant_id": tenant["tenant_id"],
+                        "error": result.get("error", "Unknown error"),
+                    }
+                )
+        except Exception as e:
+            logging.error(f"Error syncing devices for {tenant['name']}: {str(e)}")
+            results.append(
+                {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
+            )
+
+    failed_count = len([r for r in results if r["status"] == "error"])
+    if failed_count > 0:
+        categorize_sync_errors(results, "Device")
+
+    return func.HttpResponse(
+        f"Synced {total_devices} devices ({total_managed} managed, {total_azure_ad} Azure AD)",
+        status_code=200,
+    )

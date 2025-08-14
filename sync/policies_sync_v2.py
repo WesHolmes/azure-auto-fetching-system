@@ -1,15 +1,15 @@
 from datetime import datetime
 import logging
 
-from core.database import upsert_many
+from core.database_v2 import upsert_many_v2
 from core.graph_client import GraphClient
 
 
 logger = logging.getLogger(__name__)
 
 
-def fetch_conditional_access_policies(tenant_id):
-    """Fetch conditional access policies from Microsoft Graph"""
+def fetch_conditional_access_policies_v2(tenant_id):
+    """Fetch conditional access policies from Microsoft Graph for V2"""
     try:
         logger.info(f"Fetching conditional access policies for tenant {tenant_id}")
 
@@ -36,31 +36,29 @@ def fetch_conditional_access_policies(tenant_id):
         raise
 
 
-def transform_conditional_access_policies(policies, tenant_id):
-    """Transform Graph API policies to database records"""
+def transform_conditional_access_policies_v2(policies, tenant_id):
+    """Transform Graph API policies to V2 database records"""
     records = []
 
-    logger.info(f"Transforming {len(policies)} conditional access policies")
+    logger.info(f"Transforming {len(policies)} conditional access policies for V2")
 
     for policy in policies:
         record = {
-            "id": policy.get("id"),
             "tenant_id": tenant_id,
+            "policy_id": policy.get("id"),
             "display_name": policy.get("displayName"),
-            "state": policy.get("state") == "enabled",
-            "created_date": policy.get("createdDateTime"),
-            "modified_date": policy.get("modifiedDateTime"),
-            "synced_at": datetime.now().isoformat(),
+            "is_active": 1 if policy.get("state") == "enabled" else 0,
+            "last_updated": datetime.now().isoformat(),
         }
 
         records.append(record)
 
-    logger.info(f"Transformed {len(records)} policy records")
+    logger.info(f"Transformed {len(records)} policy records for V2")
     return records
 
 
-def fetch_tenant_users(tenant_id):
-    """Fetch all users from Microsoft Graph for the tenant"""
+def fetch_tenant_users_v2(tenant_id):
+    """Fetch all users from Microsoft Graph for the tenant - V2 version"""
     try:
         logger.info(f"Fetching all users from Microsoft Graph for tenant {tenant_id}")
 
@@ -92,7 +90,6 @@ def fetch_tenant_users(tenant_id):
                     "userType": user.get("userType", "Member"),
                 }
 
-        logger.info(f"Successfully fetched {len(user_lookup)} users from Microsoft Graph")
         return user_lookup
 
     except Exception as e:
@@ -100,8 +97,8 @@ def fetch_tenant_users(tenant_id):
         return {}
 
 
-def fetch_tenant_applications(tenant_id):
-    """Fetch all applications/service principals from Microsoft Graph for the tenant"""
+def fetch_tenant_applications_v2(tenant_id):
+    """Fetch all applications/service principals from Microsoft Graph for the tenant - V2 version"""
     try:
         logger.info(f"Fetching all applications from Microsoft Graph for tenant {tenant_id}")
 
@@ -147,7 +144,6 @@ def fetch_tenant_applications(tenant_id):
                     "accountEnabled": app.get("accountEnabled", True),
                 }
 
-        logger.info(f"Successfully fetched {len(applications)} applications from Microsoft Graph")
         return app_lookup
 
     except Exception as e:
@@ -155,8 +151,8 @@ def fetch_tenant_applications(tenant_id):
         return {}
 
 
-def resolve_policy_users(tenant_id, policy, tenant_users):
-    """Resolve which users are assigned to a specific policy"""
+def resolve_policy_users_v2(tenant_id, policy, tenant_users):
+    """Resolve which users are assigned to a specific policy - V2 version"""
     policy_id = policy.get("id")
     policy_name = policy.get("displayName", "Unknown Policy")
     conditions = policy.get("conditions", {})
@@ -166,44 +162,30 @@ def resolve_policy_users(tenant_id, policy, tenant_users):
     include_users = users_condition.get("includeUsers", [])
     exclude_users = set(users_condition.get("excludeUsers", []))
 
-    logger.info(f"Processing policy '{policy_name}' - includeUsers: {include_users}, excludeUsers: {list(exclude_users)}")
-
     assigned_users = set()
 
     # Process include users
     for user_spec in include_users:
         if user_spec == "All":
-            # Include all users in the tenant
             assigned_users.update(tenant_users.keys())
-            logger.info(f"Policy '{policy_name}' applies to ALL users ({len(tenant_users)} users)")
         elif user_spec == "GuestsOrExternalUsers":
-            # Include guest/external users
             guest_users = {uid for uid, user in tenant_users.items() if user.get("userType") == "Guest"}
             assigned_users.update(guest_users)
-            logger.info(f"Policy '{policy_name}' applies to {len(guest_users)} guest users")
         elif user_spec in tenant_users:
-            # Specific user ID
             assigned_users.add(user_spec)
-            user_name = tenant_users[user_spec].get("displayName", "Unknown")
-            logger.info(f"Policy '{policy_name}' applies to specific user: {user_name}")
         else:
-            # Could be a group ID or role - for now log and skip
             logger.warning(f"Policy '{policy_name}' has unhandled includeUsers spec: {user_spec}")
 
     # Remove excluded users
-    excluded_count = len(assigned_users & exclude_users)
     assigned_users = assigned_users - exclude_users
 
-    if excluded_count > 0:
-        logger.info(f"Policy '{policy_name}' excluded {excluded_count} users")
-
-    logger.info(f"Policy '{policy_name}' final assignment: {len(assigned_users)} users")
+    logger.info(f"Policy '{policy_name}' assigned to {len(assigned_users)} users")
 
     return assigned_users
 
 
-def resolve_policy_applications(tenant_id, policy, tenant_applications):
-    """Resolve which applications are assigned to a specific policy"""
+def resolve_policy_applications_v2(tenant_id, policy, tenant_applications):
+    """Resolve which applications are assigned to a specific policy - V2 version"""
     policy_id = policy.get("id")
     policy_name = policy.get("displayName", "Unknown Policy")
     conditions = policy.get("conditions", {})
@@ -213,56 +195,41 @@ def resolve_policy_applications(tenant_id, policy, tenant_applications):
     include_applications = applications_condition.get("includeApplications", [])
     exclude_applications = set(applications_condition.get("excludeApplications", []))
 
-    logger.info(
-        f"Processing policy '{policy_name}' - includeApplications: {include_applications}, excludeApplications: {list(exclude_applications)}"
-    )
-
     assigned_applications = set()
 
     # Process include applications
     for app_spec in include_applications:
         if app_spec == "All":
-            # Include all applications in the tenant
             assigned_applications.update(tenant_applications.keys())
-            logger.info(f"Policy '{policy_name}' applies to ALL applications ({len(tenant_applications)} applications)")
         elif app_spec in tenant_applications:
-            # Specific application ID (could be service principal ID or app ID)
             assigned_applications.add(app_spec)
-            app_name = tenant_applications[app_spec].get("displayName", "Unknown")
-            logger.info(f"Policy '{policy_name}' applies to specific application: {app_name}")
         else:
-            # Could be an unrecognized application ID or special value - log and skip
             logger.warning(f"Policy '{policy_name}' has unhandled includeApplications spec: {app_spec}")
 
     # Remove excluded applications
-    excluded_count = len(assigned_applications & exclude_applications)
     assigned_applications = assigned_applications - exclude_applications
 
-    if excluded_count > 0:
-        logger.info(f"Policy '{policy_name}' excluded {excluded_count} applications")
-
-    logger.info(f"Policy '{policy_name}' final application assignment: {len(assigned_applications)} applications")
+    logger.info(f"Policy '{policy_name}' assigned to {len(assigned_applications)} applications")
 
     return assigned_applications
 
 
-def create_policy_user_records(tenant_id, policies, tenant_users):
-    """Create policy-user mapping records for database storage"""
+def create_policy_user_records_v2(tenant_id, policies, tenant_users):
+    """Create policy-user mapping records for V2 database storage"""
     policy_user_records = []
-    synced_at = datetime.now().isoformat()
+    last_updated = datetime.now().isoformat()
 
     try:
-        logger.info(f"Creating policy-user mappings for {len(policies)} policies")
-
         for policy in policies:
             policy_id = policy.get("id")
+            policy_name = policy.get("displayName")
             if not policy_id:
                 continue
 
             # Resolve which users this policy applies to
-            assigned_user_ids = resolve_policy_users(tenant_id, policy, tenant_users)
+            assigned_user_ids = resolve_policy_users_v2(tenant_id, policy, tenant_users)
 
-            # Create database records for each user-policy assignment
+            # Create V2 database records for each user-policy assignment
             for user_id in assigned_user_ids:
                 user_info = tenant_users.get(user_id, {})
 
@@ -271,36 +238,35 @@ def create_policy_user_records(tenant_id, policies, tenant_users):
                         "tenant_id": tenant_id,
                         "user_id": user_id,
                         "policy_id": policy_id,
-                        "user_principal_name": user_info.get("userPrincipalName", ""),
-                        "synced_at": synced_at,
+                        "user_principal_name": user_info.get("userPrincipalName"),
+                        "policy_name": policy_name,
+                        "last_updated": last_updated,
                     }
                 )
 
-        logger.info(f"Created {len(policy_user_records)} policy-user assignment records")
         return policy_user_records
 
     except Exception as e:
-        logger.error(f"Failed to create policy-user records: {str(e)}")
+        logger.error(f"Failed to create V2 policy-user records: {str(e)}")
         return []
 
 
-def create_policy_application_records(tenant_id, policies, tenant_applications):
-    """Create policy-application mapping records for database storage"""
+def create_policy_application_records_v2(tenant_id, policies, tenant_applications):
+    """Create policy-application mapping records for V2 database storage"""
     policy_application_records = []
-    synced_at = datetime.now().isoformat()
+    last_updated = datetime.now().isoformat()
 
     try:
-        logger.info(f"Creating policy-application mappings for {len(policies)} policies")
-
         for policy in policies:
             policy_id = policy.get("id")
+            policy_name = policy.get("displayName")
             if not policy_id:
                 continue
 
             # Resolve which applications this policy applies to
-            assigned_application_ids = resolve_policy_applications(tenant_id, policy, tenant_applications)
+            assigned_application_ids = resolve_policy_applications_v2(tenant_id, policy, tenant_applications)
 
-            # Create database records for each application-policy assignment
+            # Create V2 database records for each application-policy assignment
             for app_id in assigned_application_ids:
                 app_info = tenant_applications.get(app_id, {})
 
@@ -309,27 +275,27 @@ def create_policy_application_records(tenant_id, policies, tenant_applications):
                         "tenant_id": tenant_id,
                         "application_id": app_info.get("id", app_id),  # Use service principal ID
                         "policy_id": policy_id,
-                        "application_name": app_info.get("displayName", ""),
-                        "synced_at": synced_at,
+                        "application_name": app_info.get("displayName"),
+                        "policy_name": policy_name,
+                        "last_updated": last_updated,
                     }
                 )
 
-        logger.info(f"Created {len(policy_application_records)} policy-application assignment records")
         return policy_application_records
 
     except Exception as e:
-        logger.error(f"Failed to create policy-application records: {str(e)}")
+        logger.error(f"Failed to create V2 policy-application records: {str(e)}")
         return []
 
 
-def sync_conditional_access_policies(tenant_id, tenant_name):
-    """Synchronize conditional access policies for a single tenant"""
+def sync_conditional_access_policies_v2(tenant_id, tenant_name):
+    """Synchronize conditional access policies for a single tenant using V2 schema"""
     try:
-        logger.info(f"Starting conditional access policy sync for {tenant_name} ({tenant_id})")
+        logger.info(f"Starting V2 conditional access policy sync for {tenant_name} ({tenant_id})")
         start_time = datetime.now()
 
         # Fetch data from Microsoft Graph
-        policies = fetch_conditional_access_policies(tenant_id)
+        policies = fetch_conditional_access_policies_v2(tenant_id)
 
         if not policies:
             logger.warning(f"No conditional access policies found for {tenant_name}")
@@ -338,43 +304,41 @@ def sync_conditional_access_policies(tenant_id, tenant_name):
                 "tenant_id": tenant_id,
                 "tenant_name": tenant_name,
                 "policies_synced": 0,
-                "policy_users_synced": 0,
-                "policy_applications_synced": 0,
-                "duration_seconds": (datetime.now() - start_time).total_seconds(),
+                "user_policies_synced": 0,
+                "application_policies_synced": 0,
+                "sync_time_seconds": (datetime.now() - start_time).total_seconds(),
             }
 
-        # Transform to database format
-        records = transform_conditional_access_policies(policies, tenant_id)
+        # Transform to V2 database format
+        policy_records = transform_conditional_access_policies_v2(policies, tenant_id)
 
-        # Store policies in database
-        policies_stored = upsert_many("policies", records)
+        # Store policies in V2 database
+        policies_stored = upsert_many_v2("policies_v2", policy_records)
 
         # Fetch tenant users from Microsoft Graph
-        tenant_users = fetch_tenant_users(tenant_id)
+        tenant_users = fetch_tenant_users_v2(tenant_id)
 
-        # Create and store policy-user assignments
-        policy_user_records = create_policy_user_records(tenant_id, policies, tenant_users)
-        policy_users_stored = 0
+        # Create and store policy-user assignments in V2
+        policy_user_records = create_policy_user_records_v2(tenant_id, policies, tenant_users)
+        user_policies_stored = 0
 
         if policy_user_records:
-            policy_users_stored = upsert_many("policy_users", policy_user_records)
-            logger.info(f"Stored {policy_users_stored} policy-user assignments for {tenant_name}")
+            user_policies_stored = upsert_many_v2("user_policies_v2", policy_user_records)
 
         # Fetch tenant applications from Microsoft Graph
-        tenant_applications = fetch_tenant_applications(tenant_id)
+        tenant_applications = fetch_tenant_applications_v2(tenant_id)
 
-        # Create and store policy-application assignments
-        policy_application_records = create_policy_application_records(tenant_id, policies, tenant_applications)
-        policy_applications_stored = 0
+        # Create and store policy-application assignments in V2
+        policy_application_records = create_policy_application_records_v2(tenant_id, policies, tenant_applications)
+        application_policies_stored = 0
 
         if policy_application_records:
-            policy_applications_stored = upsert_many("policy_applications", policy_application_records)
-            logger.info(f"Stored {policy_applications_stored} policy-application assignments for {tenant_name}")
+            application_policies_stored = upsert_many_v2("application_policies_v2", policy_application_records)
 
         sync_duration = (datetime.now() - start_time).total_seconds()
 
         logger.info(
-            f"Successfully synced {policies_stored} conditional access policies, {policy_users_stored} user assignments, and {policy_applications_stored} application assignments for {tenant_name}"
+            f"V2 policies sync completed for {tenant_name}: {policies_stored} policies, {user_policies_stored} user assignments, {application_policies_stored} app assignments in {sync_duration:.2f}s"
         )
 
         return {
@@ -382,19 +346,19 @@ def sync_conditional_access_policies(tenant_id, tenant_name):
             "tenant_id": tenant_id,
             "tenant_name": tenant_name,
             "policies_synced": policies_stored,
-            "policy_users_synced": policy_users_stored,
-            "policy_applications_synced": policy_applications_stored,
-            "duration_seconds": sync_duration,
+            "user_policies_synced": user_policies_stored,
+            "application_policies_synced": application_policies_stored,
+            "sync_time_seconds": sync_duration,
         }
 
     except Exception as e:
-        logger.error(f"Conditional access policy sync failed for {tenant_name}: {str(e)}")
+        logger.error(f"V2 conditional access policy sync failed for {tenant_name}: {str(e)}")
         return {
             "status": "error",
             "tenant_id": tenant_id,
             "tenant_name": tenant_name,
             "policies_synced": 0,
-            "policy_users_synced": 0,
-            "policy_applications_synced": 0,
+            "user_policies_synced": 0,
+            "application_policies_synced": 0,
             "error": str(e),
         }

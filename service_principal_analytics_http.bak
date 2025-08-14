@@ -1,0 +1,44 @@
+@app.route(route="analytics/serviceprincipals", methods=["GET"])
+def service_principal_analytics_http(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        import json
+        from analysis.sp_analysis import (
+            analyze_service_principals,
+            format_analytics_json,
+        )
+
+        # Determine tenant mode
+        tenants = get_tenants()
+        tenant_mode = (
+            "single"
+            if len(tenants) == 1
+            and tenants[0]["tenant_id"] == "3aae0fb1-276f-42f8-8e4d-36ca10cbb779"
+            else "multi"
+        )
+
+        analytics_result = analyze_service_principals(tenant_mode)
+
+        if analytics_result["status"] == "success":
+            json_result = format_analytics_json(analytics_result)
+            return func.HttpResponse(
+                json.dumps(json_result, indent=2),
+                status_code=200,
+                mimetype="application/json",
+            )
+        else:
+            error_result = {"status": "error", "error": analytics_result["error"]}
+            return func.HttpResponse(
+                json.dumps(error_result, indent=2),
+                status_code=500,
+                mimetype="application/json",
+            )
+
+    except Exception as e:
+        logging.error(f"Service principal analytics HTTP failed: {str(e)}")
+        error_result = {"status": "error", "error": str(e)}
+
+        return func.HttpResponse(
+            json.dumps(error_result, indent=2),
+            status_code=500,
+            mimetype="application/json",
+        )

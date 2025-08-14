@@ -1,4 +1,5 @@
 import os
+
 from core.graph_client import GraphClient
 
 
@@ -11,9 +12,5 @@ def get_tenants(tenant_mode="single"):
     client = GraphClient(os.getenv("PARTNER_TENANT_ID"))
 
     contracts = client.get("/contracts")
-    data = [
-        {"tenant_id": c["customerId"], "name": c["displayName"]}
-        for c in contracts
-        if c.get("customerId")
-    ]
+    data = [{"tenant_id": c["customerId"], "name": c["displayName"]} for c in contracts if c.get("customerId")]
     return data

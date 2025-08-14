@@ -1,0 +1,96 @@
+@app.route(route="sync/serviceprincipals", methods=["POST"])
+def application_sync_http(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP trigger for service principal sync for configured tenant"""
+    try:
+        logging.info("Processing service principal sync request")
+
+        # Get configured tenant automatically
+        tenants = get_tenants()
+        
+        if not tenants:
+            return func.HttpResponse(
+                json.dumps({
+                    "success": False,
+                    "error": "No tenants configured"
+                }),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
+
+        # Use the first (and only) configured tenant
+        tenant = tenants[0]
+        tenant_id = tenant["tenant_id"]
+        tenant_name = tenant["name"]
+
+        logging.info(f"Syncing service principals for tenant: {tenant_name} ({tenant_id})")
+
+        # Sync service principals for the configured tenant
+        result = sync_service_principals(tenant_id, tenant_name)
+
+        if result["status"] == "success":
+            response_data = {
+                "success": True,
+                "data": {
+                    "tenant_id": tenant_id,
+                    "tenant_name": tenant_name,
+                    "service_principals_synced": result["service_principals_synced"],
+                    "sync_timestamp": datetime.now().isoformat()
+                },
+                "metadata": {
+                    "operation": "service_principal_sync",
+                    "tenant_id": tenant_id,
+                    "tenant_name": tenant_name,
+                    "service_principals_synced": result["service_principals_synced"]
+                },
+                "actions": []
+            }
+
+            logging.info(f"✓ Service principal sync completed for {tenant_name}: {result['service_principals_synced']} service principals synced")
+            return func.HttpResponse(
+                json.dumps(response_data, indent=2),
+                status_code=200,
+                headers={"Content-Type": "application/json"}
+            )
+        else:
+            error_msg = result.get("error", "Unknown error")
+            logging.error(f"✗ Service principal sync failed for {tenant_name}: {error_msg}")
+            
+            response_data = {
+                "success": False,
+                "error": f"Service principal sync failed: {error_msg}",
+                "data": {
+                    "tenant_id": tenant_id,
+                    "tenant_name": tenant_name,
+                    "status": "failed"
+                },
+                "metadata": {
+                    "operation": "service_principal_sync",
+                    "tenant_id": tenant_id,
+                    "tenant_name": tenant_name
+                },
+                "actions": []
+            }
+
+            return func.HttpResponse(
+                json.dumps(response_data, indent=2),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
+
+    except Exception as e:
+        error_msg = f"Error in service principal sync: {str(e)}"
+        logging.error(error_msg)
+
+        return func.HttpResponse(
+            json.dumps({
+                "success": False,
+                "error": error_msg,
+                "data": [],
+                "metadata": {
+                    "operation": "service_principal_sync"
+                },
+                "actions": []
+            }),
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )

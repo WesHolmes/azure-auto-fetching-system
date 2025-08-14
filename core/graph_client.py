@@ -1,8 +1,10 @@
-import time
-import requests
-import msal
-import os
 import logging
+import os
+import time
+
+import msal
+import requests
+
 
 # Note: time.sleep() is acceptable here because:
 # 1. Azure Functions handles scaling automatically
@@ -32,18 +34,14 @@ class GraphClient:
             client_credential=self.client_secret,
         )
 
-        result = app.acquire_token_for_client(
-            scopes=["https://graph.microsoft.com/.default"]
-        )
+        result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
 
         if "access_token" in result:
             self.token = result["access_token"]
             self.token_expires = time.time() + result.get("expires_in", 3600) - 300
             return self.token
         else:
-            raise Exception(
-                f"Token acquisition failed: {result.get('error', 'Unknown error')}"
-            )
+            raise Exception(f"Token acquisition failed: {result.get('error', 'Unknown error')}")
 
     def get(
         self,
@@ -82,7 +80,7 @@ class GraphClient:
         while url:
             # Only use params for the first request, pagination URLs already include parameters
             current_params = params if not all_results else None
-            response = requests.get(url, headers=headers, params=current_params)
+            response = requests.get(url, headers=headers, params=current_params, timeout=60)
 
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 5))
@@ -120,9 +118,7 @@ class GraphClient:
                 retry_count = getattr(self, "_retry_count", 0)
                 self._retry_count = retry_count + 1
                 wait_time = min(30, 5 * (2**retry_count))  # Max 30 seconds
-                logging.info(
-                    f"Waiting {wait_time} seconds before retry #{self._retry_count}"
-                )
+                logging.info(f"Waiting {wait_time} seconds before retry #{self._retry_count}")
                 time.sleep(wait_time)
                 continue
 
@@ -142,149 +138,135 @@ class GraphClient:
 
     def disable_user(self, user_id):
         """Disable a user account by setting accountEnabled to False"""
-        
+
         try:
             headers = {
                 "Authorization": f"Bearer {self.get_token()}",
                 "Content-Type": "application/json",
             }
-            
+
             # microsoft graph API endpoint to update user
             url = f"{self.base_url}/users/{user_id}"
-            
+
             # request body to disable the user
-            data = {
-                "accountEnabled": False
-            }
-            
-            response = requests.patch(url, headers=headers, json=data)
-            
+            data = {"accountEnabled": False}
+
+            response = requests.patch(url, headers=headers, json=data, timeout=60)
+
             # handle rate limiting
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 5))
                 logging.warning(f"Rate limited while disabling user - waiting {retry_after} seconds")
                 time.sleep(retry_after)
                 # retry the request
-                response = requests.patch(url, headers=headers, json=data)
-            
+                response = requests.patch(url, headers=headers, json=data, timeout=60)
+
             # enhanced error handling
             if response.status_code == 401:
                 error_msg = f"401 Unauthorized - Cannot disable user {user_id}: Authentication failed"
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
-                
+
             elif response.status_code == 403:
                 error_msg = f"403 Forbidden - Cannot disable user {user_id}: Insufficient permissions"
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
-                
+
             elif response.status_code == 404:
                 error_msg = f"404 Not Found - User {user_id} does not exist"
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
-                
+
             elif response.status_code == 503:
-                error_msg = f"503 Service Unavailable - Microsoft Graph service temporarily unavailable"
+                error_msg = "503 Service Unavailable - Microsoft Graph service temporarily unavailable"
                 logging.warning(error_msg)
                 return {"status": "error", "error": error_msg}
-            
+
             # check for success (204 No Content is expected for PATCH operations)
             if response.status_code in [200, 204]:
                 logging.info(f"Successfully disabled user {user_id}")
                 return {"status": "success", "message": f"User {user_id} disabled successfully"}
-            
+
             # handle other error status codes
             response.raise_for_status()
             return {"status": "success", "message": f"User {user_id} disabled successfully"}
-            
+
         except requests.exceptions.RequestException as e:
             error_msg = f"Network error while disabling user {user_id}: {str(e)}"
             logging.error(error_msg)
             return {"status": "error", "error": error_msg}
-            
+
         except Exception as e:
             error_msg = f"Unexpected error while disabling user {user_id}: {str(e)}"
             logging.error(error_msg)
             return {"status": "error", "error": error_msg}
-        
+
     def reset_user_password(self, user_id):
         """Reset a user's password with a secure temporary password and force change on next login"""
-        
+
         try:
             headers = {
                 "Authorization": f"Bearer {self.get_token()}",
                 "Content-Type": "application/json",
             }
-            
+
             # Generate secure temporary password
             import secrets
             import string
+
             # 12 character password with letters, digits, and special chars
-            temp_password = ''.join(secrets.choice(string.ascii_letters + string.digits + "!@#$%&*") for _ in range(12))
-            
+            temp_password = "".join(secrets.choice(string.ascii_letters + string.digits + "!@#$%&*") for _ in range(12))
+
             # Microsoft Graph API endpoint to update user password
             url = f"{self.base_url}/users/{user_id}"
-            
+
             # Request body - always force change and set temp password
-            data = {
-                "passwordProfile": {
-                    "password": temp_password,
-                    "forceChangePasswordNextSignIn": True
-                }
-            }
-            
-            response = requests.patch(url, headers=headers, json=data)
-            
+            data = {"passwordProfile": {"password": temp_password, "forceChangePasswordNextSignIn": True}}
+
+            response = requests.patch(url, headers=headers, json=data, timeout=60)
+
             # Handle rate limiting
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 5))
                 logging.warning(f"Rate limited while resetting password - waiting {retry_after} seconds")
                 time.sleep(retry_after)
-                response = requests.patch(url, headers=headers, json=data)
-            
+                response = requests.patch(url, headers=headers, json=data, timeout=60)
+
             # Enhanced error handling
             if response.status_code == 401:
                 error_msg = f"401 Unauthorized - Cannot reset password for user {user_id}: Authentication failed"
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
-                
+
             elif response.status_code == 403:
                 error_msg = f"403 Forbidden - Cannot reset password for user {user_id}: Insufficient permissions"
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
-                
+
             elif response.status_code == 404:
                 error_msg = f"404 Not Found - User {user_id} does not exist"
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
-                
+
             elif response.status_code == 503:
-                error_msg = f"503 Service Unavailable - Microsoft Graph service temporarily unavailable"
+                error_msg = "503 Service Unavailable - Microsoft Graph service temporarily unavailable"
                 logging.warning(error_msg)
                 return {"status": "error", "error": error_msg}
-            
+
             # Check for success (204 No Content is expected for PATCH operations)
             if response.status_code in [200, 204]:
                 logging.info(f"Successfully reset password for user {user_id}")
-                return {
-                    "status": "success", 
-                    "message": f"Password reset for user {user_id}",
-                    "temporary_password": temp_password
-                }
-            
+                return {"status": "success", "message": f"Password reset for user {user_id}", "temporary_password": temp_password}
+
             # Handle other error status codes
             response.raise_for_status()
-            return {
-                "status": "success", 
-                "message": f"Password reset for user {user_id}",
-                "temporary_password": temp_password
-            }
-            
+            return {"status": "success", "message": f"Password reset for user {user_id}", "temporary_password": temp_password}
+
         except requests.exceptions.RequestException as e:
             error_msg = f"Network error while resetting password for user {user_id}: {str(e)}"
             logging.error(error_msg)
             return {"status": "error", "error": error_msg}
-            
+
         except Exception as e:
             error_msg = f"Unexpected error while resetting password for user {user_id}: {str(e)}"
             logging.error(error_msg)

@@ -1,0 +1,36 @@
+@app.route(route="sync/policies", methods=["POST"])
+def policies_sync_http(req: func.HttpRequest) -> func.HttpResponse:
+    tenants = get_tenants()
+    total_policies = 0
+    total_policy_users = 0
+    error_counts = {}
+
+    for tenant in tenants:
+        try:
+            result = sync_conditional_access_policies(
+                tenant["tenant_id"], tenant["name"]
+            )
+            if result["status"] == "success":
+                total_policies += result["policies_synced"]
+                total_policy_users += result["policy_users_synced"]
+            else:
+                # Track error codes from the sync result
+                error_code = extract_error_code(result["error"])
+                if error_code:
+                    error_counts[error_code] = error_counts.get(error_code, 0) + 1
+        except Exception as e:
+            logging.error(
+                f"Error syncing conditional access policies for {tenant['name']}: {str(e)}"
+            )
+            # Track error codes from exceptions
+            error_code = extract_error_code(str(e))
+            if error_code:
+                error_counts[error_code] = error_counts.get(error_code, 0) + 1
+
+    # Log error summary
+    log_error_summary(error_counts, "Policies HTTP sync")
+
+    return func.HttpResponse(
+        f"Synced {total_policies} conditional access policies and {total_policy_users} user assignments",
+        status_code=200,
+    )

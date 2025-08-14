@@ -1,0 +1,44 @@
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+# If you use a src/ layout, uncomment:
+# src = ["src"]
+exclude = [
+  ".git",
+  ".venv",
+  "__pycache__",
+  "venv",
+  "build",
+  "dist",
+]
+ 
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+ 
+[tool.ruff.lint]
+select = [
+  "E",      # pycodestyle
+  "F",      # pyflakes
+  "I",      # isort (import sorting via lint fixes)
+  "UP",     # pyupgrade
+  "C4",     # flake8-comprehensions
+  "RUF100", # Unused noqa
+]
+ignore = ["E501"] # long lines handled by formatter
+ 
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+ 
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-sort-within-sections = true
+lines-after-imports = 2
+lines-between-types = 0
+# If grouping is incorrect, set one of:
+# known-first-party = ["your_pkg_name"]
+# or rely on `tool.ruff.src = ["src"]` if you use src layout
+ 
+# Optional: example for template/HTML linter
+[tool.djlint]
+profile = "jinja"

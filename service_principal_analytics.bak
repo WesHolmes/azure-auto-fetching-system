@@ -1,0 +1,42 @@
+@app.schedule(
+    schedule="0 30 8 * * *", arg_name="timer", run_on_startup=False, use_monitor=False
+)
+def service_principal_analytics(timer: func.TimerRequest) -> None:
+    if timer.past_due:
+        logging.warning("Service principal analytics timer is past due!")
+
+    try:
+        import json
+        from analysis.sp_analysis import (
+            analyze_service_principals,
+            format_analytics_json,
+        )
+
+        # Determine tenant mode
+        tenants = get_tenants()
+        tenant_mode = (
+            "single"
+            if len(tenants) == 1
+            and tenants[0]["tenant_id"] == "3aae0fb1-276f-42f8-8e4d-36ca10cbb779"
+            else "multi"
+        )
+
+        logging.info(f"Starting service principal analytics in {tenant_mode} mode")
+
+        # Perform analytics
+        analytics_result = analyze_service_principals(tenant_mode)
+
+        if analytics_result["status"] == "success":
+            # Format and log as clean JSON
+            json_result = format_analytics_json(analytics_result)
+            logging.info(
+                f"Service Principal Analytics Result: {json.dumps(json_result, indent=2)}"
+            )
+
+        else:
+            error_result = {"status": "error", "error": analytics_result["error"]}
+            logging.error(f"Analytics failed: {json.dumps(error_result)}")
+
+    except Exception as e:
+        error_result = {"status": "error", "error": str(e)}
+        logging.error(f"Service principal analytics failed: {json.dumps(error_result)}")

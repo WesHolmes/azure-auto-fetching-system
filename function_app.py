@@ -3434,6 +3434,31 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
         user = user_result[0]
         logging.info(f"Found user: {user['user_principal_name']}")
 
+        # Safety check: require disabled users before deletion
+        if user.get("account_enabled", True):
+            return func.HttpResponse(
+                json.dumps(
+                    {
+                        "success": False,
+                        "error": "User must be disabled before deletion for safety",
+                        "data": {
+                            "user_id": user["user_id"],
+                            "user_principal_name": user["user_principal_name"],
+                            "tenant_id": tenant_id,
+                            "tenant_name": tenant_name,
+                            "status": "active_user",
+                            "note": "Disable user first, then delete",
+                        },
+                    }
+                ),
+                status_code=422,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # Safety check: warn about global admins
+        if user.get("is_global_admin", False):
+            logging.warning(f"WARNING: Deleting global admin user {user['user_principal_name']}")
+
         # Initialize Graph Beta Client
         graph_client = GraphBetaClient(tenant_id)
 
@@ -4514,6 +4539,270 @@ def assign_role_bulk(req: func.HttpRequest) -> func.HttpResponse:
                         "tenant_id": req_body.get("tenant_id") if "req_body" in locals() else None,
                         "role_name": req_body.get("role_name") if "req_body" in locals() else None,
                         "operation": "bulk_assign_role_selected_users",
+                        "execution_time": datetime.now().isoformat(),
+                    },
+                    "actions": [],
+                }
+            ),
+            status_code=500,
+            headers={"Content-Type": "application/json"},
+        )
+
+
+@app.route(route="users/bulk-delete", methods=["POST"])
+def delete_user_bulk(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP POST endpoint to delete multiple selected users for a tenant"""
+    # single tenant, multiple resource operation
+
+    try:
+        # extract and validate request data
+        logging.info("Processing bulk user delete request for selected users")
+
+        req_body = req.get_json()
+        if not req_body:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "Request body is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # get parameters from request
+        tenant_id = req_body.get("tenant_id")
+        user_ids = req_body.get("user_ids", [])
+
+        # validate required parameters
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "tenant_id is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if not user_ids or not isinstance(user_ids, list):
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_ids array is required and must be a list"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if len(user_ids) == 0:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_ids array cannot be empty"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        execution_time = datetime.now().isoformat()
+        logging.info(f"Processing bulk delete for {len(user_ids)} selected users in tenant: {tenant_name}")
+
+        # get user details for the selected user IDs
+        user_ids_str = ",".join(["?" for _ in user_ids])
+        users_query = f"""
+        SELECT user_id, display_name, user_principal_name, last_sign_in_date, account_enabled, 
+               license_count, group_count, is_global_admin
+        FROM usersV2
+        WHERE tenant_id = ? AND user_id IN ({user_ids_str})
+        """
+        query_params = [tenant_id] + user_ids
+        selected_users = query(users_query, query_params)
+
+        if not selected_users:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "None of the specified user IDs were found in the tenant"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if all requested users were found
+        found_user_ids = {user["user_id"] for user in selected_users}
+        missing_user_ids = set(user_ids) - found_user_ids
+        if missing_user_ids:
+            logging.warning(f"Some user IDs not found: {missing_user_ids}")
+
+        # initialize tracking variables
+        processed_users = []
+        counters = {"successfully_deleted": 0, "failed": 0, "skipped": 0}
+
+        # initialize Graph
+        graph_client = GraphBetaClient(tenant_id)
+
+        # process each selected user
+        for user in selected_users:
+            user_id = user["user_id"]
+            user_principal_name = user["user_principal_name"]
+            display_name = user.get("display_name")
+            last_sign_in = user.get("last_sign_in_date")
+            account_enabled = user.get("account_enabled", True)
+            license_count = user.get("license_count", 0)
+            group_count = user.get("group_count", 0)
+            is_global_admin = user.get("is_global_admin", False)
+
+            user_data = {
+                "user_id": user_id,
+                "user_principal_name": user_principal_name,
+                "display_name": display_name,
+                "last_sign_in": last_sign_in,
+                "account_enabled": account_enabled,
+                "license_count": license_count,
+                "group_count": group_count,
+                "is_global_admin": is_global_admin,
+            }
+
+            try:
+                # Safety check: require disabled users before deletion
+                if account_enabled:
+                    user_data["status"] = "skipped"
+                    user_data["note"] = "User is active - must disable before deletion"
+                    counters["skipped"] += 1
+                    processed_users.append(user_data)
+                    logging.warning(f"User {user_principal_name} is active, skipping deletion for safety")
+                    continue
+
+                # Safety check: warn about global admins
+                if is_global_admin:
+                    logging.warning(f"WARNING: Deleting global admin user {user_principal_name}")
+
+                # Delete user via Graph API first
+                logging.info(f"Deleting user {user_principal_name} via Graph API")
+                delete_result = graph_client.delete_user(user_id)
+
+                if delete_result.get("status") != "success":
+                    error_msg = delete_result.get("error", "Unknown error deleting user")
+                    user_data["status"] = "failed"
+                    user_data["error"] = error_msg
+                    counters["failed"] += 1
+                    processed_users.append(user_data)
+                    logging.error(f"Failed to delete {user_principal_name}: {error_msg}")
+                    continue
+
+                # Remove user and related records from local database
+                try:
+                    # Delete related records first (foreign key constraints)
+                    execute_query("DELETE FROM user_licensesV2 WHERE tenant_id = ? AND user_id = ?", (tenant_id, user_id))
+                    execute_query("DELETE FROM user_rolesV2 WHERE tenant_id = ? AND user_id = ?", (tenant_id, user_id))
+
+                    # Delete user record
+                    execute_query("DELETE FROM usersV2 WHERE tenant_id = ? AND user_id = ?", (tenant_id, user_id))
+
+                    logging.info(f"Successfully cleaned up local database for user {user_principal_name}")
+
+                except Exception as db_error:
+                    logging.error(f"Graph API deletion succeeded but local DB cleanup failed for {user_principal_name}: {str(db_error)}")
+                    # Note: User is deleted in Graph but local DB might be out of sync
+
+                user_data["status"] = "deleted"
+                user_data["deleted_at"] = execution_time
+                user_data["dependencies_cleaned"] = {
+                    "licenses_removed": license_count,
+                    "roles_removed": group_count,
+                    "was_global_admin": is_global_admin,
+                }
+                counters["successfully_deleted"] += 1
+                processed_users.append(user_data)
+                logging.info(f"Successfully deleted user {user_principal_name}")
+
+            except Exception as e:
+                error_msg = f"Error processing user {user_principal_name}: {str(e)}"
+                user_data["status"] = "failed"
+                user_data["error"] = error_msg
+                counters["failed"] += 1
+                processed_users.append(user_data)
+                logging.error(error_msg)
+
+        # build actions array based on results
+        actions = []
+
+        if counters["failed"] > 0:
+            actions.append(
+                {
+                    "type": "review_failures",
+                    "description": f"{counters['failed']} user(s) failed deletion - review permissions",
+                    "users_affected": counters["failed"],
+                }
+            )
+
+        if counters["successfully_deleted"] > 0:
+            actions.append(
+                {
+                    "type": "verify_deletion",
+                    "description": f"Verify {counters['successfully_deleted']} user deletion(s) in Microsoft 365 admin center",
+                    "users_affected": counters["successfully_deleted"],
+                }
+            )
+
+        if counters["skipped"] > 0:
+            actions.append(
+                {
+                    "type": "disable_users_first",
+                    "description": f"{counters['skipped']} user(s) were skipped - disable them first before deletion",
+                    "users_affected": counters["skipped"],
+                }
+            )
+
+        # determine HTTP status code
+        if counters["failed"] == 0 and counters["successfully_deleted"] > 0:
+            status_code = 200  # Complete success - all users deleted
+        elif counters["failed"] > 0 and counters["successfully_deleted"] > 0:
+            status_code = 207  # Multi-status - mixed results
+        else:
+            status_code = 500  # All failed
+
+        # determine overall success status
+        success_status = counters["failed"] == 0 or counters["successfully_deleted"] > 0
+
+        # build final response
+        response_data = {
+            "success": success_status,
+            "data": processed_users,
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "operation": "bulk_delete_selected_users",
+                "execution_time": execution_time,
+                "summary": {
+                    "total_requested": len(user_ids),
+                    "total_found": len(selected_users),
+                    "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
+                    "successfully_deleted": counters["successfully_deleted"],
+                    "failed": counters["failed"],
+                    "skipped": counters["skipped"],
+                },
+            },
+            "actions": actions,
+        }
+
+        logging.info(f"Bulk user deletion operation completed. Summary: {counters}")
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=status_code,
+            headers={"Content-Type": "application/json"},
+        )
+
+    except Exception as e:
+        error_msg = f"Error in bulk user deletion operation: {str(e)}"
+        logging.error(error_msg)
+
+        return func.HttpResponse(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": error_msg,
+                    "data": [],
+                    "metadata": {
+                        "tenant_id": req_body.get("tenant_id") if "req_body" in locals() else None,
+                        "operation": "bulk_delete_selected_users",
                         "execution_time": datetime.now().isoformat(),
                     },
                     "actions": [],

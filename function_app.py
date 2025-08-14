@@ -1034,75 +1034,22 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
         # grab license optimization data
         license_optimization = calculate_license_optimization(tenant_id)
 
-        # fetch fresh license data from Microsoft Graph API for frontend dropdown
-        try:
-            graph_client = GraphBetaClient(tenant_id)
-            # Get fresh license data from Graph API
-            logging.info(f"Fetching licenses from Graph API for tenant {tenant_id}")
-            fresh_licenses = graph_client.get("/subscribedSkus")
+        # fetch license data from local database for frontend dropdown
+        logging.info(f"Fetching licenses from local database for tenant {tenant_id}")
 
-            # Debug logging to see what we got
-            logging.info(f"Graph API response type: {type(fresh_licenses)}")
-            logging.info(f"Graph API response: {fresh_licenses}")
+        license_options_query = """
+        SELECT DISTINCT 
+            license_display_name,
+            license_partnumber,
+            monthly_cost,
+            status
+        FROM licenses 
+        WHERE tenant_id = ?
+        ORDER BY license_display_name
+        """
+        license_options = query(license_options_query, (tenant_id,))
 
-            # Check if we got valid data (should be a list)
-            if not isinstance(fresh_licenses, list):
-                logging.warning(f"Graph API returned unexpected data type: {type(fresh_licenses)}. Data: {fresh_licenses}")
-                raise Exception(f"Invalid response format from Graph API: {type(fresh_licenses)}")
-
-            # Transform Graph API data to match expected format
-            license_options = []
-            for license_info in fresh_licenses:
-                if isinstance(license_info, dict):
-                    try:
-                        # Extract the key fields safely
-                        sku_part_number = license_info.get("skuPartNumber", "")
-                        sku_id = license_info.get("skuId", "")
-                        capability_status = license_info.get("capabilityStatus", "")
-
-                        # Use skuPartNumber as display name, fallback to skuId
-                        display_name = sku_part_number if sku_part_number else sku_id
-
-                        # Determine status based on capabilityStatus
-                        if isinstance(capability_status, dict):
-                            status = "active" if capability_status.get("enabled", 0) > 0 else "inactive"
-                        else:
-                            # If capabilityStatus is a string like "Enabled", use that
-                            status = "active" if str(capability_status).lower() == "enabled" else "inactive"
-
-                        license_options.append(
-                            {
-                                "license_display_name": display_name,
-                                "license_partnumber": display_name,
-                                "monthly_cost": 0.0,  # Graph API doesn't provide cost info
-                                "status": status,
-                            }
-                        )
-
-                        logging.info(f"Processed license: {display_name} (Status: {status})")
-
-                    except Exception as license_error:
-                        logging.warning(f"Error processing license info {license_info}: {str(license_error)}")
-                        continue
-                else:
-                    logging.warning(f"Skipping non-dict license info: {type(license_info)} - {license_info}")
-
-            logging.info(f"Fetched {len(license_options)} fresh licenses from Graph API for tenant {tenant_id}")
-
-        except Exception as e:
-            logging.warning(f"Failed to fetch fresh licenses from Graph API: {str(e)}. Falling back to database.")
-            # Fallback to database if Graph API fails
-            license_options_query = """
-            SELECT DISTINCT 
-                license_display_name,
-                license_partnumber,
-                monthly_cost,
-                status
-            FROM licenses 
-            WHERE tenant_id = ?
-            ORDER BY license_display_name
-            """
-            license_options = query(license_options_query, (tenant_id,))
+        logging.info(f"Fetched {len(license_options)} licenses from local database for tenant {tenant_id}")
 
         # calculate metrics
         total_license_types = total_licenses_result[0]["count"] if total_licenses_result else 0
@@ -1959,9 +1906,6 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
 def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
     """POST endpoint to reset a user's password with temporary password"""
     # single tenant, single resource operation
-
-    from datetime import datetime
-
     try:
         # extract user_id from URL path
         user_id = req.route_params.get("user_id")
@@ -2731,7 +2675,6 @@ def get_sps_report(req: func.HttpRequest) -> func.HttpResponse:
                 enabled_sps = total_sps - disabled_sps  # Custom calculation
 
                 # Calculate expiring credentials (within 30 days)
-                from datetime import datetime, timedelta
 
                 now = datetime.now()
                 thirty_days_from_now = now + timedelta(days=30)
@@ -3571,8 +3514,6 @@ def disable_users_bulk(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP POST endpoint to disable multiple selected users for a tenant"""
     # single tenant, multiple resource operation
 
-    from datetime import datetime
-
     try:
         # extract and validate request data
         logging.info("Processing bulk user disable request for selected users")
@@ -3807,6 +3748,772 @@ def disable_users_bulk(req: func.HttpRequest) -> func.HttpResponse:
                     "metadata": {
                         "tenant_id": req_body.get("tenant_id") if "req_body" in locals() else None,
                         "operation": "bulk_disable_selected_users",
+                        "execution_time": datetime.now().isoformat(),
+                    },
+                    "actions": [],
+                }
+            ),
+            status_code=500,
+            headers={"Content-Type": "application/json"},
+        )
+
+
+@app.route(route="users/bulk-reset-password", methods=["POST"])
+def reset_password_bulk(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP POST endpoint to reset passwords for multiple selected users for a tenant"""
+    # single tenant, multiple resource operation
+
+    try:
+        # extract and validate request data
+        logging.info("Processing bulk password reset request for selected users")
+
+        req_body = req.get_json()
+        if not req_body:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "Request body is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # get parameters from request
+        tenant_id = req_body.get("tenant_id")
+        user_ids = req_body.get("user_ids", [])
+
+        # validate required parameters
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "tenant_id is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if not user_ids or not isinstance(user_ids, list):
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_ids array is required and must be a list"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if len(user_ids) == 0:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_ids array cannot be empty"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        execution_time = datetime.now().isoformat()
+        logging.info(f"Processing bulk password reset for {len(user_ids)} selected users in tenant: {tenant_name}")
+
+        # get user details for the selected user IDs
+        user_ids_str = ",".join(["?" for _ in user_ids])
+        users_query = f"""
+        SELECT user_id, display_name, user_principal_name, last_sign_in_date, account_enabled
+        FROM usersV2
+        WHERE tenant_id = ? AND user_id IN ({user_ids_str})
+        """
+        query_params = [tenant_id] + user_ids
+        selected_users = query(users_query, query_params)
+
+        if not selected_users:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "None of the specified user IDs were found in the tenant"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if all requested users were found
+        found_user_ids = {user["user_id"] for user in selected_users}
+        missing_user_ids = set(user_ids) - found_user_ids
+        if missing_user_ids:
+            logging.warning(f"Some user IDs not found: {missing_user_ids}")
+
+        # initialize tracking variables
+        processed_users = []
+        counters = {"successfully_reset": 0, "failed": 0, "skipped": 0}
+
+        # initialize Graph client
+        graph_client = GraphBetaClient(tenant_id)
+
+        # process each selected user
+        for user in selected_users:
+            user_id = user["user_id"]
+            user_principal_name = user["user_principal_name"]
+            display_name = user.get("display_name")
+            last_sign_in = user.get("last_sign_in_date")
+
+            user_data = {
+                "user_id": user_id,
+                "user_principal_name": user_principal_name,
+                "display_name": display_name,
+                "last_sign_in": last_sign_in,
+            }
+
+            try:
+                # check if user is disabled
+                if not user.get("account_enabled", True):
+                    user_data["status"] = "skipped"
+                    user_data["note"] = "User is disabled - cannot reset password"
+                    counters["skipped"] += 1
+                    processed_users.append(user_data)
+                    logging.info(f"User {user_principal_name} is disabled, skipping password reset")
+                    continue
+
+                # reset password via Graph API
+                logging.info(f"Resetting password for user {user_principal_name} via Graph API")
+                reset_result = graph_client.reset_user_password(user_id)
+
+                if reset_result.get("status") != "success":
+                    error_msg = reset_result.get("error", "Unknown error resetting password")
+                    user_data["status"] = "failed"
+                    user_data["error"] = error_msg
+                    counters["failed"] += 1
+                    processed_users.append(user_data)
+                    logging.error(f"Failed to reset password for {user_principal_name}: {error_msg}")
+                    continue
+
+                # update local database to track password reset
+                current_time = datetime.now().isoformat()
+                update_query = "UPDATE usersV2 SET last_updated = ? WHERE tenant_id = ? AND user_id = ?"
+
+                try:
+                    execute_query(update_query, (current_time, tenant_id, user_id))
+                    logging.info(f"Updated local database for user {user_principal_name}")
+                except Exception as db_error:
+                    logging.warning(
+                        f"Graph API password reset succeeded but local DB update failed for {user_principal_name}: {str(db_error)}"
+                    )
+
+                user_data["status"] = "password_reset"
+                user_data["reset_at"] = current_time
+                user_data["temporary_password"] = reset_result.get("temporary_password")
+                user_data["force_change_password"] = True
+                counters["successfully_reset"] += 1
+                processed_users.append(user_data)
+                logging.info(f"Successfully reset password for user {user_principal_name}")
+
+            except Exception as e:
+                error_msg = f"Error processing user {user_principal_name}: {str(e)}"
+                user_data["status"] = "failed"
+                user_data["error"] = error_msg
+                counters["failed"] += 1
+                processed_users.append(user_data)
+                logging.error(error_msg)
+
+        # build actions array based on results
+        actions = []
+
+        if counters["failed"] > 0:
+            actions.append(
+                {
+                    "type": "review_failures",
+                    "description": f"{counters['failed']} user(s) failed password reset - review permissions",
+                    "users_affected": counters["failed"],
+                }
+            )
+
+        if counters["successfully_reset"] > 0:
+            actions.append(
+                {
+                    "type": "secure_delivery",
+                    "description": f"Securely deliver {counters['successfully_reset']} temporary password(s) to users",
+                    "users_affected": counters["successfully_reset"],
+                }
+            )
+
+        if counters["skipped"] > 0:
+            actions.append(
+                {
+                    "type": "review_skipped",
+                    "description": f"{counters['skipped']} user(s) were skipped (disabled accounts)",
+                    "users_affected": counters["skipped"],
+                }
+            )
+
+        # determine HTTP status code
+        if counters["failed"] == 0 and counters["successfully_reset"] > 0:
+            status_code = 200  # Complete success - all passwords reset
+        elif counters["failed"] > 0 and counters["successfully_reset"] > 0:
+            status_code = 207  # Multi-status - mixed results
+        else:
+            status_code = 500  # All failed
+
+        # determine overall success status
+        success_status = counters["failed"] == 0 or counters["successfully_reset"] > 0
+
+        # build final response
+        response_data = {
+            "success": success_status,
+            "data": processed_users,
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "operation": "bulk_reset_password_selected_users",
+                "execution_time": execution_time,
+                "summary": {
+                    "total_requested": len(user_ids),
+                    "total_found": len(selected_users),
+                    "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
+                    "successfully_reset": counters["successfully_reset"],
+                    "failed": counters["failed"],
+                    "skipped": counters["skipped"],
+                },
+            },
+            "actions": actions,
+        }
+
+        logging.info(f"Bulk password reset operation completed. Summary: {counters}")
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=status_code,
+            headers={"Content-Type": "application/json"},
+        )
+
+    except Exception as e:
+        error_msg = f"Error in bulk password reset operation: {str(e)}"
+        logging.error(error_msg)
+
+        return func.HttpResponse(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": error_msg,
+                    "data": [],
+                    "metadata": {
+                        "tenant_id": req_body.get("tenant_id") if "req_body" in locals() else None,
+                        "operation": "bulk_reset_password_selected_users",
+                        "execution_time": datetime.now().isoformat(),
+                    },
+                    "actions": [],
+                }
+            ),
+            status_code=500,
+            headers={"Content-Type": "application/json"},
+        )
+
+
+@app.route(route="users/bulk-assign-license", methods=["POST"])
+def assign_license_bulk(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP POST endpoint to assign the same license to multiple selected users for a tenant"""
+    # single tenant, multiple resource operation
+
+    try:
+        # extract and validate request data
+        logging.info("Processing bulk license assignment request for selected users")
+
+        req_body = req.get_json()
+        if not req_body:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "Request body is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # get parameters from request
+        tenant_id = req_body.get("tenant_id")
+        user_ids = req_body.get("user_ids", [])
+        license_sku = req_body.get("license_sku")
+
+        # validate required parameters
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "tenant_id is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if not user_ids or not isinstance(user_ids, list):
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_ids array is required and must be a list"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if len(user_ids) == 0:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_ids array cannot be empty"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if not license_sku:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "license_sku is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        execution_time = datetime.now().isoformat()
+        logging.info(f"Processing bulk license assignment for {len(user_ids)} selected users in tenant: {tenant_name}")
+
+        # get user details for the selected user IDs
+        user_ids_str = ",".join(["?" for _ in user_ids])
+        users_query = f"""
+        SELECT user_id, display_name, user_principal_name, last_sign_in_date, account_enabled, license_count
+        FROM usersV2
+        WHERE tenant_id = ? AND user_id IN ({user_ids_str})
+        """
+        query_params = [tenant_id] + user_ids
+        selected_users = query(users_query, query_params)
+
+        if not selected_users:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "None of the specified user IDs were found in the tenant"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if all requested users were found
+        found_user_ids = {user["user_id"] for user in selected_users}
+        missing_user_ids = set(user_ids) - found_user_ids
+        if missing_user_ids:
+            logging.warning(f"Some user IDs not found: {missing_user_ids}")
+
+        # initialize tracking variables
+        processed_users = []
+        counters = {"successfully_assigned": 0, "failed": 0, "skipped": 0}
+
+        # initialize Graph client
+        graph_client = GraphBetaClient(tenant_id)
+
+        # process each selected user
+        for user in selected_users:
+            user_id = user["user_id"]
+            user_principal_name = user["user_principal_name"]
+            display_name = user.get("display_name")
+            last_sign_in = user.get("last_sign_in_date")
+            current_license_count = user.get("license_count", 0)
+
+            user_data = {
+                "user_id": user_id,
+                "user_principal_name": user_principal_name,
+                "display_name": display_name,
+                "last_sign_in": last_sign_in,
+                "previous_license_count": current_license_count,
+            }
+
+            try:
+                # check if user is disabled
+                if not user.get("account_enabled", True):
+                    user_data["status"] = "skipped"
+                    user_data["note"] = "User is disabled - cannot assign license"
+                    counters["skipped"] += 1
+                    processed_users.append(user_data)
+                    logging.info(f"User {user_principal_name} is disabled, skipping license assignment")
+                    continue
+
+                # assign license via Graph API
+                logging.info(f"Assigning license '{license_sku}' to user {user_principal_name} via Graph API")
+                license_result = graph_client.assign_license(user_id, license_sku)
+
+                if license_result.get("status") != "success":
+                    error_msg = license_result.get("error", "Unknown error assigning license")
+                    user_data["status"] = "failed"
+                    user_data["error"] = error_msg
+                    counters["failed"] += 1
+                    processed_users.append(user_data)
+                    logging.error(f"Failed to assign license to {user_principal_name}: {error_msg}")
+                    continue
+
+                # update local database to track license assignment
+                current_time = datetime.now().isoformat()
+                update_query = "UPDATE usersV2 SET license_count = license_count + 1, last_updated = ? WHERE tenant_id = ? AND user_id = ?"
+
+                try:
+                    execute_query(update_query, (current_time, tenant_id, user_id))
+                    logging.info(f"Updated local database for user {user_principal_name}")
+                except Exception as db_error:
+                    logging.warning(
+                        f"Graph API license assignment succeeded but local DB update failed for {user_principal_name}: {str(db_error)}"
+                    )
+
+                user_data["status"] = "license_assigned"
+                user_data["assigned_at"] = current_time
+                user_data["license_sku"] = license_sku
+                user_data["new_license_count"] = current_license_count + 1
+                user_data["license_details"] = license_result.get("data", {})
+                counters["successfully_assigned"] += 1
+                processed_users.append(user_data)
+                logging.info(f"Successfully assigned license '{license_sku}' to user {user_principal_name}")
+
+            except Exception as e:
+                error_msg = f"Error processing user {user_principal_name}: {str(e)}"
+                user_data["status"] = "failed"
+                user_data["error"] = error_msg
+                counters["failed"] += 1
+                processed_users.append(user_data)
+                logging.error(error_msg)
+
+        # build actions array based on results
+        actions = []
+
+        if counters["failed"] > 0:
+            actions.append(
+                {
+                    "type": "review_failures",
+                    "description": f"{counters['failed']} user(s) failed license assignment - review permissions",
+                    "users_affected": counters["failed"],
+                }
+            )
+
+        if counters["successfully_assigned"] > 0:
+            actions.append(
+                {
+                    "type": "verify_licenses",
+                    "description": f"Verify {counters['successfully_assigned']} license assignment(s) in Microsoft 365 admin center",
+                    "users_affected": counters["successfully_assigned"],
+                }
+            )
+
+        if counters["skipped"] > 0:
+            actions.append(
+                {
+                    "type": "review_skipped",
+                    "description": f"{counters['skipped']} user(s) were skipped (disabled accounts)",
+                    "users_affected": counters["skipped"],
+                }
+            )
+
+        # determine HTTP status code
+        if counters["failed"] == 0 and counters["successfully_assigned"] > 0:
+            status_code = 200  # Complete success - all licenses assigned
+        elif counters["failed"] > 0 and counters["successfully_assigned"] > 0:
+            status_code = 207  # Multi-status - mixed results
+        else:
+            status_code = 500  # All failed
+
+        # determine overall success status
+        success_status = counters["failed"] == 0 or counters["successfully_assigned"] > 0
+
+        # build final response
+        response_data = {
+            "success": success_status,
+            "data": processed_users,
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "operation": "bulk_assign_license_selected_users",
+                "license_sku": license_sku,
+                "execution_time": execution_time,
+                "summary": {
+                    "total_requested": len(user_ids),
+                    "total_found": len(selected_users),
+                    "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
+                    "successfully_assigned": counters["successfully_assigned"],
+                    "failed": counters["failed"],
+                    "skipped": counters["skipped"],
+                },
+            },
+            "actions": actions,
+        }
+
+        logging.info(f"Bulk license assignment operation completed. Summary: {counters}")
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=status_code,
+            headers={"Content-Type": "application/json"},
+        )
+
+    except Exception as e:
+        error_msg = f"Error in bulk license assignment operation: {str(e)}"
+        logging.error(error_msg)
+
+        return func.HttpResponse(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": error_msg,
+                    "data": [],
+                    "metadata": {
+                        "tenant_id": req_body.get("tenant_id") if "req_body" in locals() else None,
+                        "license_sku": req_body.get("license_sku") if "req_body" in locals() else None,
+                        "operation": "bulk_assign_license_selected_users",
+                        "execution_time": datetime.now().isoformat(),
+                    },
+                    "actions": [],
+                }
+            ),
+            status_code=500,
+            headers={"Content-Type": "application/json"},
+        )
+
+
+@app.route(route="users/bulk-assign-role", methods=["POST"])
+def assign_role_bulk(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP POST endpoint to assign the same directory role to multiple selected users for a tenant"""
+    # single tenant, multiple resource operation
+
+    try:
+        # extract and validate request data
+        logging.info("Processing bulk role assignment request for selected users")
+
+        req_body = req.get_json()
+        if not req_body:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "Request body is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # get parameters from request
+        tenant_id = req_body.get("tenant_id")
+        user_ids = req_body.get("user_ids", [])
+        role_name = req_body.get("role_name")
+
+        # validate required parameters
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "tenant_id is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if not user_ids or not isinstance(user_ids, list):
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_ids array is required and must be a list"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if len(user_ids) == 0:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_ids array cannot be empty"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if not role_name:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "role_name is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        tenant_name = tenant_names[tenant_id]
+        execution_time = datetime.now().isoformat()
+        logging.info(f"Processing bulk role assignment for {len(user_ids)} selected users in tenant: {tenant_name}")
+
+        # get user details for the selected user IDs
+        user_ids_str = ",".join(["?" for _ in user_ids])
+        users_query = f"""
+        SELECT user_id, display_name, user_principal_name, last_sign_in_date, account_enabled, is_global_admin
+        FROM usersV2
+        WHERE tenant_id = ? AND user_id IN ({user_ids_str})
+        """
+        query_params = [tenant_id] + user_ids
+        selected_users = query(users_query, query_params)
+
+        if not selected_users:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "None of the specified user IDs were found in the tenant"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if all requested users were found
+        found_user_ids = {user["user_id"] for user in selected_users}
+        missing_user_ids = set(user_ids) - found_user_ids
+        if missing_user_ids:
+            logging.warning(f"Some user IDs not found: {missing_user_ids}")
+
+        # initialize tracking variables
+        processed_users = []
+        counters = {"successfully_assigned": 0, "failed": 0, "skipped": 0}
+
+        # initialize Graph client
+        graph_client = GraphBetaClient(tenant_id)
+
+        # process each selected user
+        for user in selected_users:
+            user_id = user["user_id"]
+            user_principal_name = user["user_principal_name"]
+            display_name = user.get("display_name")
+            last_sign_in = user.get("last_sign_in_date")
+            is_currently_admin = user.get("is_global_admin", False)
+
+            user_data = {
+                "user_id": user_id,
+                "user_principal_name": user_principal_name,
+                "display_name": display_name,
+                "last_sign_in": last_sign_in,
+                "was_admin_before": is_currently_admin,
+            }
+
+            try:
+                # check if user is disabled
+                if not user.get("account_enabled", True):
+                    user_data["status"] = "skipped"
+                    user_data["note"] = "User is disabled - cannot assign role"
+                    counters["skipped"] += 1
+                    processed_users.append(user_data)
+                    logging.info(f"User {user_principal_name} is disabled, skipping role assignment")
+                    continue
+
+                # assign role via Graph API
+                logging.info(f"Assigning role '{role_name}' to user {user_principal_name} via Graph API")
+                role_result = graph_client.assign_role(user_id, role_name)
+
+                if role_result.get("status") != "success":
+                    error_msg = role_result.get("error", "Unknown error assigning role")
+                    user_data["status"] = "failed"
+                    user_data["error"] = error_msg
+                    counters["failed"] += 1
+                    processed_users.append(user_data)
+                    logging.error(f"Failed to assign role to {user_principal_name}: {error_msg}")
+                    continue
+
+                # update local database to track role assignment
+                current_time = datetime.now().isoformat()
+
+                # Update role-specific fields based on the role being assigned
+                if role_name.lower() in ["global administrator", "global admin"]:
+                    update_query = "UPDATE usersV2 SET is_global_admin = 1, last_updated = ? WHERE tenant_id = ? AND user_id = ?"
+                else:
+                    # For other roles, just update the last_updated timestamp
+                    update_query = "UPDATE usersV2 SET last_updated = ? WHERE tenant_id = ? AND user_id = ?"
+
+                try:
+                    execute_query(update_query, (current_time, tenant_id, user_id))
+                    logging.info(f"Updated local database for user {user_principal_name}")
+                except Exception as db_error:
+                    logging.warning(
+                        f"Graph API role assignment succeeded but local DB update failed for {user_principal_name}: {str(db_error)}"
+                    )
+
+                user_data["status"] = "role_assigned"
+                user_data["assigned_at"] = current_time
+                user_data["role_name"] = role_name
+                user_data["is_admin_after"] = role_name.lower() in ["global administrator", "global admin"]
+                counters["successfully_assigned"] += 1
+                processed_users.append(user_data)
+                logging.info(f"Successfully assigned role '{role_name}' to user {user_principal_name}")
+
+            except Exception as e:
+                error_msg = f"Error processing user {user_principal_name}: {str(e)}"
+                user_data["status"] = "failed"
+                user_data["error"] = error_msg
+                counters["failed"] += 1
+                processed_users.append(user_data)
+                logging.error(error_msg)
+
+        # build actions array based on results
+        actions = []
+
+        if counters["failed"] > 0:
+            actions.append(
+                {
+                    "type": "review_failures",
+                    "description": f"{counters['failed']} user(s) failed role assignment - review permissions",
+                    "users_affected": counters["failed"],
+                }
+            )
+
+        if counters["successfully_assigned"] > 0:
+            actions.append(
+                {
+                    "type": "verify_roles",
+                    "description": f"Verify {counters['successfully_assigned']} role assignment(s) in Microsoft 365 admin center",
+                    "users_affected": counters["successfully_assigned"],
+                }
+            )
+
+        if counters["skipped"] > 0:
+            actions.append(
+                {
+                    "type": "review_skipped",
+                    "description": f"{counters['skipped']} user(s) were skipped (disabled accounts)",
+                    "users_affected": counters["skipped"],
+                }
+            )
+
+        # determine HTTP status code
+        if counters["failed"] == 0 and counters["successfully_assigned"] > 0:
+            status_code = 200  # Complete success - all roles assigned
+        elif counters["failed"] > 0 and counters["successfully_assigned"] > 0:
+            status_code = 207  # Multi-status - mixed results
+        else:
+            status_code = 500  # All failed
+
+        # determine overall success status
+        success_status = counters["failed"] == 0 or counters["successfully_assigned"] > 0
+
+        # build final response
+        response_data = {
+            "success": success_status,
+            "data": processed_users,
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "operation": "bulk_assign_role_selected_users",
+                "role_name": role_name,
+                "execution_time": execution_time,
+                "summary": {
+                    "total_requested": len(user_ids),
+                    "total_found": len(selected_users),
+                    "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
+                    "successfully_assigned": counters["successfully_assigned"],
+                    "failed": counters["failed"],
+                    "skipped": counters["skipped"],
+                },
+            },
+            "actions": actions,
+        }
+
+        logging.info(f"Bulk role assignment operation completed. Summary: {counters}")
+        return func.HttpResponse(
+            json.dumps(response_data, indent=2),
+            status_code=status_code,
+            headers={"Content-Type": "application/json"},
+        )
+
+    except Exception as e:
+        error_msg = f"Error in bulk role assignment operation: {str(e)}"
+        logging.error(error_msg)
+
+        return func.HttpResponse(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": error_msg,
+                    "data": [],
+                    "metadata": {
+                        "tenant_id": req_body.get("tenant_id") if "req_body" in locals() else None,
+                        "role_name": req_body.get("role_name") if "req_body" in locals() else None,
+                        "operation": "bulk_assign_role_selected_users",
                         "execution_time": datetime.now().isoformat(),
                     },
                     "actions": [],

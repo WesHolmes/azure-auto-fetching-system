@@ -1,5 +1,6 @@
 import os
-from core.graph_client import GraphClient
+
+from core.graph_beta_client import GraphBetaClient
 
 
 def get_tenants(tenant_mode="single"):
@@ -8,12 +9,8 @@ def get_tenants(tenant_mode="single"):
 
     # Multi-tenant: fetch customer tenants from contracts
     # GraphClient only needs tenant_id - it gets CLIENT_ID and CLIENT_SECRET from env vars
-    client = GraphClient(os.getenv("PARTNER_TENANT_ID"))
+    client = GraphBetaClient(os.getenv("PARTNER_TENANT_ID"))
 
     contracts = client.get("/contracts")
-    data = [
-        {"tenant_id": c["customerId"], "name": c["displayName"]}
-        for c in contracts
-        if c.get("customerId")
-    ]
+    data = [{"tenant_id": c["customerId"], "name": c["displayName"]} for c in contracts if c.get("customerId")]
     return data

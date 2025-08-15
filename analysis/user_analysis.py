@@ -1,13 +1,15 @@
+from datetime import UTC, datetime, timedelta
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Any
-from core.database import query, execute_query
+from typing import Any
+
+from core.databaseV2 import execute_query, query
+
 
 # configure logging for azure functions
 logger = logging.getLogger(__name__)
 
 
-def calculate_inactive_users(tenant_id: str, days: int = 90) -> Dict[str, Any]:
+def calculate_inactive_users(tenant_id: str, days: int = 90) -> dict[str, Any]:
     """
     calculate inactive users based on last sign-in activity
     analyzes user activity patterns and potential license cost savings
@@ -19,15 +21,15 @@ def calculate_inactive_users(tenant_id: str, days: int = 90) -> Dict[str, Any]:
         logger.info(f"starting inactive users analysis for tenant {tenant_id}")
 
         # calculate the cutoff date for determining inactive users
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
         logger.debug(f"cutoff date set to {cutoff_date}")
 
         # query users from database - using sqlite parameterized queries
         query_sql = """
         SELECT 
-            id, display_name, user_principal_name, account_enabled,
-            last_sign_in, license_count, is_admin
-        FROM users 
+            user_id, display_name, user_principal_name, account_enabled,
+            last_sign_in_date, license_count, is_global_admin
+        FROM usersV2 
         WHERE tenant_id = ? AND account_enabled = 1
         """
 
@@ -42,18 +44,18 @@ def calculate_inactive_users(tenant_id: str, days: int = 90) -> Dict[str, Any]:
 
         # process each user to determine activity status
         for user in users:
-            if user["last_sign_in"]:
+            if user["last_sign_in_date"]:
                 # parse the last sign-in timestamp
-                last_signin = datetime.fromisoformat(user["last_sign_in"])
+                last_signin = datetime.fromisoformat(user["last_sign_in_date"])
 
                 # check if user is inactive based on cutoff date
                 if last_signin < cutoff_date:
-                    days_inactive = (datetime.now(timezone.utc) - last_signin).days
+                    days_inactive = (datetime.now(UTC) - last_signin).days
 
                     # add to inactive users with potential savings calculation
                     inactive_users.append(
                         {
-                            "user_id": user["id"],
+                            "user_id": user["user_id"],
                             "display_name": user["display_name"],
                             "user_principal_name": user["user_principal_name"],
                             "days_inactive": days_inactive,
@@ -74,15 +76,11 @@ def calculate_inactive_users(tenant_id: str, days: int = 90) -> Dict[str, Any]:
             placeholders = ",".join(["?" for _ in inactive_user_ids])
             inactive_cost_query = f"""
             SELECT SUM(monthly_cost) as total_cost
-            FROM user_licenses 
+            FROM user_licensesV2 
             WHERE user_id IN ({placeholders}) AND tenant_id = ?
             """
             cost_result = query(inactive_cost_query, inactive_user_ids + [tenant_id])
-            monthly_savings = (
-                cost_result[0]["total_cost"]
-                if cost_result and cost_result[0]["total_cost"]
-                else 0
-            )
+            monthly_savings = cost_result[0]["total_cost"] if cost_result and cost_result[0]["total_cost"] else 0
         else:
             monthly_savings = 0
 
@@ -93,15 +91,13 @@ def calculate_inactive_users(tenant_id: str, days: int = 90) -> Dict[str, Any]:
         # prepare comprehensive result object
         result = {
             "tenant_id": tenant_id,
-            "analysis_date": datetime.now(timezone.utc).isoformat(),
+            "analysis_date": datetime.now(UTC).isoformat(),
             "threshold_days": days,
             "inactive_count": len(inactive_users),
             "active_count": len(active_users),
             "never_signed_in_count": len(never_signed_in),
             "potential_monthly_savings": monthly_savings,
-            "utilization_rate": round((len(active_users) / len(users)) * 100, 2)
-            if users
-            else 0,
+            "utilization_rate": round((len(active_users) / len(users)) * 100, 2) if users else 0,
             "inactive_users": inactive_users[:10],  # top 10 for summary report
         }
 
@@ -112,7 +108,7 @@ def calculate_inactive_users(tenant_id: str, days: int = 90) -> Dict[str, Any]:
         return {"status": "error", "error": str(e), "tenant_id": tenant_id}
 
 
-def calculate_mfa_compliance(tenant_id: str) -> Dict[str, Any]:
+def calculate_mfa_compliance(tenant_id: str) -> dict[str, Any]:
     """
     calculate multi-factor authentication compliance across users
     identifies security risks from non-mfa users, especially admins
@@ -126,9 +122,9 @@ def calculate_mfa_compliance(tenant_id: str) -> Dict[str, Any]:
         # query users with mfa registration status
         query_sql = """
         SELECT 
-            id, display_name, user_principal_name, 
-            is_mfa_compliant, is_admin, account_enabled
-        FROM users 
+            user_id, display_name, user_principal_name, 
+            is_mfa_compliant, is_global_admin, account_enabled
+        FROM usersV2 
         WHERE tenant_id = ? AND account_enabled = 1
         """
 
@@ -151,7 +147,7 @@ def calculate_mfa_compliance(tenant_id: str) -> Dict[str, Any]:
                 non_compliant.append(user)
 
                 # check if non-compliant user is an admin - high security risk
-                if user.get("is_admin", False):
+                if user.get("is_global_admin", False):
                     admin_non_compliant.append(user)
 
         # calculate compliance metrics
@@ -164,18 +160,14 @@ def calculate_mfa_compliance(tenant_id: str) -> Dict[str, Any]:
         # prepare comprehensive compliance report
         result = {
             "tenant_id": tenant_id,
-            "analysis_date": datetime.now(timezone.utc).isoformat(),
+            "analysis_date": datetime.now(UTC).isoformat(),
             "total_users": total_users,
             "mfa_enabled": len(compliant),
             "non_compliant": len(non_compliant),
             "compliance_rate": round(compliance_rate, 1),
             "admin_non_compliant": len(admin_non_compliant),
-            "risk_level": "high"
-            if admin_non_compliant
-            else ("medium" if non_compliant else "low"),
-            "critical_users": admin_non_compliant[
-                :10
-            ],  # top 10 admin users without mfa - security priority
+            "risk_level": "high" if admin_non_compliant else ("medium" if non_compliant else "low"),
+            "critical_users": admin_non_compliant[:10],  # top 10 admin users without mfa - security priority
         }
 
         return result
@@ -185,7 +177,7 @@ def calculate_mfa_compliance(tenant_id: str) -> Dict[str, Any]:
         return {"status": "error", "error": str(e), "tenant_id": tenant_id}
 
 
-def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
+def calculate_license_optimization(tenant_id: str) -> dict[str, Any]:
     """
     analyze license usage patterns and identify optimization opportunities
     helps reduce costs by identifying unused or underutilized licenses
@@ -203,9 +195,9 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
         # focuses on user activity patterns to estimate license utilization
         query_sql = """
         SELECT 
-            id, display_name, user_principal_name, last_sign_in,
-            account_enabled, user_type, license_count
-        FROM users
+            user_id, display_name, user_principal_name, last_sign_in_date,
+            account_enabled, account_type, license_count
+        FROM usersV2
         WHERE tenant_id = ? AND account_enabled = 1
         """
 
@@ -220,18 +212,18 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
         guest_users = 0
 
         # 90-day inactivity threshold for license optimization
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=90)
+        cutoff_date = datetime.now(UTC) - timedelta(days=90)
 
         # analyze each user's activity pattern
         for user in users:
             # count guest users (may not need paid licenses)
-            if user.get("user_type") == "Guest":
+            if user.get("account_type") == "Guest":
                 guest_users += 1
                 continue
 
-            if user["last_sign_in"]:
+            if user["last_sign_in_date"]:
                 # parse last sign-in date
-                last_signin = datetime.fromisoformat(user["last_sign_in"])
+                last_signin = datetime.fromisoformat(user["last_sign_in_date"])
 
                 if last_signin >= cutoff_date:
                     # user is active - license is being utilized
@@ -246,27 +238,21 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
         # Calculate optimization metrics using actual license costs
         total_paid_users = len(users) - guest_users
         underutilized_licenses = inactive_users + never_signed_in
-        utilization_rate = (
-            (active_users / total_paid_users * 100) if total_paid_users > 0 else 0
-        )
+        utilization_rate = (active_users / total_paid_users * 100) if total_paid_users > 0 else 0
 
         # Calculate actual cost savings using real license costs from database
         # Get actual monthly costs for underutilized licenses
         underutilized_cost_query = """
         SELECT SUM(ul.monthly_cost) as total_cost
-        FROM users u
-        INNER JOIN user_licenses ul ON u.id = ul.user_id
+        FROM usersV2 u
+        INNER JOIN user_licensesV2 ul ON u.user_id = ul.user_id
         WHERE u.tenant_id = ? 
         AND u.account_enabled = 1
-        AND (u.last_sign_in IS NULL OR datetime(u.last_sign_in) < datetime('now', '-90 days'))
+        AND (u.last_sign_in_date IS NULL OR datetime(u.last_sign_in_date) < datetime('now', '-90 days'))
         """
 
         cost_result = query(underutilized_cost_query, (tenant_id,))
-        actual_monthly_savings = (
-            cost_result[0]["total_cost"]
-            if cost_result and cost_result[0]["total_cost"]
-            else 0
-        )
+        actual_monthly_savings = cost_result[0]["total_cost"] if cost_result and cost_result[0]["total_cost"] else 0
         actual_annual_savings = actual_monthly_savings * 12
 
         # Fallback estimate if no cost data available
@@ -283,7 +269,7 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
         # prepare comprehensive optimization report
         result = {
             "tenant_id": tenant_id,
-            "analysis_date": datetime.now(timezone.utc).isoformat(),
+            "analysis_date": datetime.now(UTC).isoformat(),
             "total_users": len(users),
             "total_paid_users": total_paid_users,
             "active_users": active_users,
@@ -294,9 +280,7 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
             "underutilized_licenses": underutilized_licenses,
             "estimated_monthly_savings": estimated_monthly_savings,
             "estimated_annual_savings": estimated_annual_savings,
-            "optimization_score": round(
-                utilization_rate, 0
-            ),  # simple score based on utilization
+            "optimization_score": round(utilization_rate, 0),  # simple score based on utilization
         }
 
         return result
@@ -306,7 +290,7 @@ def calculate_license_optimization(tenant_id: str) -> Dict[str, Any]:
         return {"status": "error", "error": str(e), "tenant_id": tenant_id}
 
 
-def fix_inactive_user_licenses(tenant_id: str) -> Dict[str, Any]:
+def fix_inactive_user_licenses(tenant_id: str) -> dict[str, Any]:
     """
     Retroactively mark licenses as inactive for users who are disabled
     but still have active license records from before they were disabled.
@@ -316,9 +300,9 @@ def fix_inactive_user_licenses(tenant_id: str) -> Dict[str, Any]:
 
         # Find inactive users who still have active license records
         query_sql = """
-        SELECT DISTINCT u.id, u.user_principal_name, u.account_enabled
-        FROM users u
-        INNER JOIN user_licenses ul ON u.id = ul.user_id
+        SELECT DISTINCT u.user_id, u.user_principal_name, u.account_enabled
+        FROM usersV2 u
+        INNER JOIN user_licensesV2 ul ON u.user_id = ul.user_id
         WHERE u.tenant_id = ? 
         AND u.account_enabled = 0 
         AND ul.is_active = 1
@@ -340,25 +324,23 @@ def fix_inactive_user_licenses(tenant_id: str) -> Dict[str, Any]:
         for user in inactive_users_with_active_licenses:
             rows_updated = execute_query(
                 """
-                UPDATE user_licenses 
+                UPDATE user_licensesV2 
                 SET is_active = 0, 
                     unassigned_date = ?,
-                    last_update = ?
+                    last_updated = ?
                 WHERE user_id = ? AND tenant_id = ? AND is_active = 1
             """,
                 (
-                    datetime.now(timezone.utc).isoformat(),
-                    datetime.now(timezone.utc).isoformat(),
-                    user["id"],
+                    datetime.now(UTC).isoformat(),
+                    datetime.now(UTC).isoformat(),
+                    user["user_id"],
                     tenant_id,
                 ),
             )
 
             if rows_updated > 0:
                 updated_count += 1
-                logger.info(
-                    f"Marked {rows_updated} licenses as inactive for user: {user['user_principal_name']}"
-                )
+                logger.info(f"Marked {rows_updated} licenses as inactive for user: {user['user_principal_name']}")
 
         logger.info(f"Fixed licenses for {updated_count} inactive users")
 
@@ -368,7 +350,7 @@ def fix_inactive_user_licenses(tenant_id: str) -> Dict[str, Any]:
             "users_updated": updated_count,
             "licenses_marked_inactive": sum(
                 query(
-                    "SELECT COUNT(*) as count FROM user_licenses WHERE tenant_id = ? AND is_active = 0",
+                    "SELECT COUNT(*) as count FROM user_licensesV2 WHERE tenant_id = ? AND is_active = 0",
                     (tenant_id,),
                 )[0].values()
             ),

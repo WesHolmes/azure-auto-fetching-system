@@ -2,8 +2,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import logging
 
-from core.database import upsert_many
-from core.graph_client import GraphClient
+from core.databaseV2 import init_schema, upsert_many
+from core.graph_beta_client import GraphBetaClient
 
 
 logger = logging.getLogger(__name__)
@@ -13,7 +13,7 @@ def fetch_users(tenant_id):
     """Fetch users from Graph API"""
     try:
         logger.info(f"Starting user fetch for tenant {tenant_id}")
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         users = graph.get(
             "/users",
@@ -26,6 +26,8 @@ def fetch_users(tenant_id):
                 "userType",
                 "department",
                 "jobTitle",
+                "officeLocation",
+                "mobilePhone",
                 "signInActivity",
                 "createdDateTime",
                 "assignedLicenses",
@@ -46,7 +48,7 @@ def fetch_users(tenant_id):
 def fetch_user_groups(tenant_id, user_id):
     """Check if user is admin"""
     try:
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
         groups = graph.get(f"/users/{user_id}/memberOf", select=["id", "displayName"])
 
         # check for admin roles
@@ -63,7 +65,7 @@ def fetch_user_mfa_status(tenant_id):
     """Fetch MFA registration details for all users"""
     try:
         logger.info(f"Fetching MFA status for tenant {tenant_id}")
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         mfa_details = graph.get(
             "/reports/authenticationMethods/userRegistrationDetails",
@@ -170,57 +172,79 @@ def transform_user_records(users, tenant_id, mfa_lookup):
                         if sku_id:
                             # We'll populate display name and part number in license_sync
                             user_license_record = {
-                                "tenant_id": tenant_id,
                                 "user_id": user_id,
+                                "tenant_id": tenant_id,
                                 "license_id": sku_id,
                                 "user_principal_name": upn,
-                                "is_active": is_active_license,
-                                "assigned_date": datetime.now().isoformat(),
-                                "unassigned_date": None,
                                 "license_display_name": "Pending Sync",  # Will be updated by license sync
                                 "license_partnumber": "Pending Sync",  # Will be updated by license sync
+                                "is_active": is_active_license,
+                                "unassigned_date": None,
                                 "monthly_cost": 15.00,  # Default, will be updated
-                                "last_update": datetime.now().isoformat(),
+                                "last_updated": datetime.now().isoformat(),
                             }
                             license_records.append(user_license_record)
                 except Exception as e:
                     logger.warning(f"Could not process licenses for user {user_id}: {str(e)}")
 
+            # Handle primary_email (required field)
+            primary_email = user.get("mail") or upn or "unknown@domain.com"
+
+            # Get password change date
+            last_password_change = user.get("lastPasswordChangeDateTime")
+
+            # Get created date
+            created_at = user.get("createdDateTime") or datetime.now().isoformat()
+
             record = {
-                "id": user_id,
+                "user_id": user_id,
                 "tenant_id": tenant_id,
-                "display_name": display_name,
                 "user_principal_name": upn,
-                "mail": user.get("mail"),
-                "account_enabled": 1 if user.get("accountEnabled") else 0,
-                "user_type": user.get("userType"),
+                "primary_email": primary_email,
+                "display_name": display_name,
                 "department": user.get("department"),
                 "job_title": user.get("jobTitle"),
-                "last_sign_in": last_sign_in,
+                "office_location": user.get("officeLocation"),
+                "mobile_phone": user.get("mobilePhone"),
+                "account_type": user.get("userType"),
+                "account_enabled": 1 if user.get("accountEnabled") else 0,
+                "is_global_admin": 1 if is_admin else 0,
                 "is_mfa_compliant": 1 if is_mfa_registered else 0,
-                "is_admin": 1 if is_admin else 0,
                 "license_count": license_count,
                 "group_count": group_count,
-                "synced_at": datetime.now().isoformat(),
+                "last_sign_in_date": last_sign_in,
+                "last_password_change": last_password_change,
+                "created_at": created_at,
+                "last_updated": datetime.now().isoformat(),
             }
             records.append(record)
 
         except Exception as e:
             logger.error(f"Failed to process user {display_name}: {str(e)}")
             # Add basic record
+            primary_email = user.get("mail") or upn or "unknown@domain.com"
+            created_at = user.get("createdDateTime") or datetime.now().isoformat()
+
             basic_record = {
-                "id": user_id,
+                "user_id": user_id,
                 "tenant_id": tenant_id,
-                "display_name": display_name,
                 "user_principal_name": upn,
-                "mail": user.get("mail"),
+                "primary_email": primary_email,
+                "display_name": display_name,
+                "department": user.get("department"),
+                "job_title": user.get("jobTitle"),
+                "office_location": user.get("officeLocation"),
+                "mobile_phone": user.get("mobilePhone"),
+                "account_type": user.get("userType"),
                 "account_enabled": 1 if user.get("accountEnabled") else 0,
-                "user_type": user.get("userType"),
+                "is_global_admin": 0,
                 "is_mfa_compliant": 0,
-                "is_admin": 0,
                 "license_count": 0,
                 "group_count": 0,
-                "synced_at": datetime.now().isoformat(),
+                "last_sign_in_date": None,
+                "last_password_change": user.get("lastPasswordChangeDateTime"),
+                "created_at": created_at,
+                "last_updated": datetime.now().isoformat(),
             }
             records.append(basic_record)
 
@@ -232,6 +256,9 @@ def sync_users(tenant_id, tenant_name):
     """Orchestrate user synchronization with enrichment"""
     start_time = datetime.now()
     logger.info(f"Starting user sync for {tenant_name} (tenant_id: {tenant_id})")
+
+    # Initialize database schema
+    init_schema()
 
     try:
         # fetch all data
@@ -260,7 +287,7 @@ def sync_users(tenant_id, tenant_name):
 
         try:
             if user_records:
-                users_stored = upsert_many("users", user_records)
+                users_stored = upsert_many("usersV2", user_records)
                 logger.info(f"Stored {users_stored} users for {tenant_name}")
         except Exception as e:
             logger.error(f"Failed to store users for {tenant_name}: {str(e)}", exc_info=True)
@@ -268,7 +295,7 @@ def sync_users(tenant_id, tenant_name):
 
         try:
             if user_license_records:
-                user_licenses_stored = upsert_many("user_licenses", user_license_records)
+                user_licenses_stored = upsert_many("user_licensesV2", user_license_records)
                 logger.info(f"Stored {user_licenses_stored} user licenses for {tenant_name}")
         except Exception as e:
             logger.error(

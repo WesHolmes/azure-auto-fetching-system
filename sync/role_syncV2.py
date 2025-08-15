@@ -2,8 +2,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import logging
 
-from core.database import upsert_many
-from core.graph_client import GraphClient
+from core.databaseV2 import init_schema, upsert_many
+from core.graph_beta_client import GraphBetaClient
 
 
 logger = logging.getLogger(__name__)
@@ -13,7 +13,7 @@ def fetch_directory_roles(tenant_id):
     """Fetch directory roles from Graph API"""
     try:
         logger.info(f"Starting directory roles fetch for tenant {tenant_id}")
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         roles = graph.get(
             "/directoryRoles",
@@ -34,7 +34,7 @@ def fetch_directory_roles(tenant_id):
 def fetch_role_members(tenant_id, role_id):
     """Fetch members of a specific directory role"""
     try:
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         members = graph.get(
             f"/directoryRoles/{role_id}/members",
@@ -78,20 +78,22 @@ def transform_role_data(roles, tenant_id):
                         "role_display_name": role.get("displayName"),
                         "role_description": role.get("description"),
                         "member_count": member_count,
+                        "created_at": datetime.utcnow().isoformat(),
+                        "last_updated": datetime.utcnow().isoformat(),
                     }
                     role_records.append(role_record)
 
                     # Process each user member of this role
                     for member in user_members:
                         user_role_record = {
-                            "tenant_id": tenant_id,
                             "user_id": member.get("id"),
+                            "tenant_id": tenant_id,
                             "role_id": role.get("id"),
                             "user_principal_name": member.get("userPrincipalName"),
                             "role_display_name": role.get("displayName"),
                             "role_description": role.get("description"),
-                            "assigned_date": datetime.utcnow().isoformat(),
-                            "synced_at": datetime.utcnow().isoformat(),
+                            "created_at": datetime.utcnow().isoformat(),
+                            "last_updated": datetime.utcnow().isoformat(),
                         }
                         user_role_records.append(user_role_record)
 
@@ -109,6 +111,10 @@ def transform_role_data(roles, tenant_id):
 
 def sync_roles(tenant_id):
     """Main function to sync directory roles and their assignments"""
+
+    # Initialize database schema
+    init_schema()
+
     try:
         logger.info(f"Starting role sync for tenant {tenant_id}")
         start_time = datetime.utcnow()
@@ -129,14 +135,14 @@ def sync_roles(tenant_id):
         role_records, user_role_records = transform_role_data(roles, tenant_id)
 
         # Store in database
-        from core.database import get_connection
+        from core.databaseV2 import get_connection
 
         conn = get_connection()
         cursor = conn.cursor()
 
         # Clear existing records for this tenant first
         cursor.execute("DELETE FROM roles WHERE tenant_id = ?", (tenant_id,))
-        cursor.execute("DELETE FROM user_roles WHERE tenant_id = ?", (tenant_id,))
+        cursor.execute("DELETE FROM user_rolesV2 WHERE tenant_id = ?", (tenant_id,))
         conn.commit()
         conn.close()
 
@@ -147,7 +153,7 @@ def sync_roles(tenant_id):
 
         # Insert new user role assignments
         if user_role_records:
-            upsert_many("user_roles", user_role_records)
+            upsert_many("user_rolesV2", user_role_records)
             logger.info(f"Successfully stored {len(user_role_records)} user role assignments")
 
         if not role_records and not user_role_records:

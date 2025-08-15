@@ -1,4 +1,3 @@
-import sqlite3
 from core.database import get_connection
 
 
@@ -21,9 +20,7 @@ def analyze_service_principals(tenant_mode="auto"):
         expired_sps = cursor.fetchone()[0]
 
         # SPs with owners
-        cursor.execute(
-            "SELECT COUNT(*) FROM service_principals WHERE owners IS NOT NULL AND owners != ''"
-        )
+        cursor.execute("SELECT COUNT(*) FROM service_principals WHERE owners IS NOT NULL AND owners != ''")
         sps_with_owners = cursor.fetchone()[0]
 
         # Disabled SPs
@@ -31,21 +28,15 @@ def analyze_service_principals(tenant_mode="auto"):
         disabled_sps = cursor.fetchone()[0]
 
         # SPs with sign-in date
-        cursor.execute(
-            "SELECT COUNT(*) FROM service_principals WHERE last_sign_in IS NOT NULL AND last_sign_in != ''"
-        )
+        cursor.execute("SELECT COUNT(*) FROM service_principals WHERE last_sign_in IS NOT NULL AND last_sign_in != ''")
         sps_with_signin = cursor.fetchone()[0]
 
         # SPs with no credentials
-        cursor.execute(
-            "SELECT COUNT(*) FROM service_principals WHERE credential_type IS NULL"
-        )
+        cursor.execute("SELECT COUNT(*) FROM service_principals WHERE credential_type IS NULL")
         sps_no_credentials = cursor.fetchone()[0]
 
         # Apps with credentials (breakdown of expired vs non-expired)
-        cursor.execute(
-            "SELECT COUNT(*) FROM service_principals WHERE credential_type IS NOT NULL"
-        )
+        cursor.execute("SELECT COUNT(*) FROM service_principals WHERE credential_type IS NOT NULL")
         apps_with_credentials = cursor.fetchone()[0]
 
         cursor.execute("""
@@ -76,31 +67,17 @@ def analyze_service_principals(tenant_mode="auto"):
 
         # Calculate percentages
         expired_percentage = (expired_sps / total_sps * 100) if total_sps > 0 else 0
-        with_owners_percentage = (
-            (sps_with_owners / total_sps * 100) if total_sps > 0 else 0
-        )
+        with_owners_percentage = (sps_with_owners / total_sps * 100) if total_sps > 0 else 0
         disabled_percentage = (disabled_sps / total_sps * 100) if total_sps > 0 else 0
-        with_signin_percentage = (
-            (sps_with_signin / total_sps * 100) if total_sps > 0 else 0
-        )
-        no_credentials_percentage = (
-            (sps_no_credentials / total_sps * 100) if total_sps > 0 else 0
-        )
+        with_signin_percentage = (sps_with_signin / total_sps * 100) if total_sps > 0 else 0
+        no_credentials_percentage = (sps_no_credentials / total_sps * 100) if total_sps > 0 else 0
 
         # Calculate percentages for apps with credentials
-        apps_with_credentials_percentage = (
-            (apps_with_credentials / total_sps * 100) if total_sps > 0 else 0
-        )
+        apps_with_credentials_percentage = (apps_with_credentials / total_sps * 100) if total_sps > 0 else 0
         expired_of_credentialed_percentage = (
-            (apps_with_expired_credentials / apps_with_credentials * 100)
-            if apps_with_credentials > 0
-            else 0
+            (apps_with_expired_credentials / apps_with_credentials * 100) if apps_with_credentials > 0 else 0
         )
-        valid_of_credentialed_percentage = (
-            (apps_with_valid_credentials / apps_with_credentials * 100)
-            if apps_with_credentials > 0
-            else 0
-        )
+        valid_of_credentialed_percentage = (apps_with_valid_credentials / apps_with_credentials * 100) if apps_with_credentials > 0 else 0
 
         return {
             "status": "success",
@@ -117,17 +94,11 @@ def analyze_service_principals(tenant_mode="auto"):
             "sps_no_credentials": sps_no_credentials,
             "no_credentials_percentage": round(no_credentials_percentage, 1),
             "apps_with_credentials": apps_with_credentials,
-            "apps_with_credentials_percentage": round(
-                apps_with_credentials_percentage, 1
-            ),
+            "apps_with_credentials_percentage": round(apps_with_credentials_percentage, 1),
             "apps_with_expired_credentials": apps_with_expired_credentials,
-            "expired_of_credentialed_percentage": round(
-                expired_of_credentialed_percentage, 1
-            ),
+            "expired_of_credentialed_percentage": round(expired_of_credentialed_percentage, 1),
             "apps_with_valid_credentials": apps_with_valid_credentials,
-            "valid_of_credentialed_percentage": round(
-                valid_of_credentialed_percentage, 1
-            ),
+            "valid_of_credentialed_percentage": round(valid_of_credentialed_percentage, 1),
             "tenant_breakdown": tenant_breakdown,
         }
 
@@ -160,19 +131,13 @@ def format_analytics_json(analytics_result):
         "service_principals_with_signin": data["sps_with_signin"],
         "service_principals_with_signin_percentage": data["with_signin_percentage"],
         "service_principals_no_credentials": data["sps_no_credentials"],
-        "service_principals_no_credentials_percentage": data[
-            "no_credentials_percentage"
-        ],
+        "service_principals_no_credentials_percentage": data["no_credentials_percentage"],
         "apps_with_credentials": data["apps_with_credentials"],
         "apps_with_credentials_percentage": data["apps_with_credentials_percentage"],
         "apps_with_expired_credentials": data["apps_with_expired_credentials"],
-        "apps_with_expired_credentials_percentage": data[
-            "expired_of_credentialed_percentage"
-        ],
+        "apps_with_expired_credentials_percentage": data["expired_of_credentialed_percentage"],
         "apps_with_valid_credentials": data["apps_with_valid_credentials"],
-        "apps_with_valid_credentials_percentage": data[
-            "valid_of_credentialed_percentage"
-        ],
+        "apps_with_valid_credentials_percentage": data["valid_of_credentialed_percentage"],
         "tenant_breakdown": tenant_breakdown,
     }
 
@@ -183,9 +148,7 @@ def format_analytics_summary(analytics_result):
         return f"Analytics Error: {analytics_result['error']}"
 
     data = analytics_result
-    mode_indicator = (
-        f" ({data['tenant_mode'].upper()} TENANT MODE)" if "tenant_mode" in data else ""
-    )
+    mode_indicator = f" ({data['tenant_mode'].upper()} TENANT MODE)" if "tenant_mode" in data else ""
 
     summary = f"""
 📊 Service Principal Analytics Summary{mode_indicator}

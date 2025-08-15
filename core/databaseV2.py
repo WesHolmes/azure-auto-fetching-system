@@ -19,26 +19,54 @@ def init_schema():
     cursor = conn.cursor()
 
     try:
-        # Users table
+        # # Users table
+        # cursor.execute(
+        #     """
+        #     CREATE TABLE IF NOT EXISTS users (
+        #         id TEXT,
+        #         tenant_id TEXT,
+        #         display_name TEXT,
+        #         user_principal_name TEXT,
+        #         mail TEXT,
+        #         account_enabled BOOLEAN,
+        #         user_type TEXT,
+        #         department TEXT,
+        #         job_title TEXT,
+        #         last_sign_in TEXT,
+        #         is_mfa_compliant BOOLEAN DEFAULT 0,
+        #         license_count INTEGER DEFAULT 0,
+        #         group_count INTEGER DEFAULT 0,
+        #         is_admin BOOLEAN DEFAULT 0,
+        #         synced_at TEXT,
+        #         PRIMARY KEY (id, tenant_id)
+        #     )
+        # """
+        # )
+
+        # Users table V2
         cursor.execute(
             """
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT,
-                tenant_id TEXT,
-                display_name TEXT,
-                user_principal_name TEXT,
-                mail TEXT,
-                account_enabled BOOLEAN,
-                user_type TEXT,
-                department TEXT,
-                job_title TEXT,
-                last_sign_in TEXT,
-                is_mfa_compliant BOOLEAN DEFAULT 0,
-                license_count INTEGER DEFAULT 0,
-                group_count INTEGER DEFAULT 0,
-                is_admin BOOLEAN DEFAULT 0,
-                synced_at TEXT,
-                PRIMARY KEY (id, tenant_id)
+            CREATE TABLE IF NOT EXISTS usersV2 (
+                user_id TEXT(50),
+                tenant_id TEXT(50) NOT NULL,
+                user_principal_name TEXT(255) NOT NULL,
+                primary_email TEXT(255) NOT NULL,
+                display_name TEXT(255),
+                department TEXT(100),
+                job_title TEXT(100),
+                office_location TEXT(100),
+                mobile_phone TEXT(50),
+                account_type TEXT(50),
+                account_enabled INTEGER NOT NULL DEFAULT 1,
+                is_global_admin INTEGER NOT NULL DEFAULT 0,
+                is_mfa_compliant INTEGER NOT NULL DEFAULT 0,
+                license_count INTEGER NOT NULL DEFAULT 0,
+                group_count INTEGER NOT NULL DEFAULT 0,
+                last_sign_in_date TEXT, -- ISO datetime format
+                last_password_change TEXT, -- ISO datetime format
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id, tenant_id)
             )
         """
         )
@@ -78,28 +106,49 @@ def init_schema():
                 warning_count INTEGER DEFAULT 0,
                 suspended_count INTEGER DEFAULT 0,
                 monthly_cost REAL DEFAULT 0,
-                last_update TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (tenant_id, license_id)
             )
         """
         )
 
         # User licenses table
+        # cursor.execute(
+        #     """
+        #     CREATE TABLE IF NOT EXISTS user_licenses (
+        #         tenant_id TEXT,
+        #         user_id TEXT,
+        #         license_id TEXT,
+        #         user_principal_name TEXT,
+        #         is_active INTEGER DEFAULT 1,
+        #         assigned_date TEXT,
+        #         unassigned_date TEXT,
+        #         license_display_name TEXT,
+        #         license_partnumber TEXT,
+        #         monthly_cost REAL DEFAULT 0,
+        #         last_update TEXT,
+        #         PRIMARY KEY (tenant_id, user_id, license_id)
+        #     )
+        # """
+        # )
+
+        # User licenses table V2
         cursor.execute(
             """
-            CREATE TABLE IF NOT EXISTS user_licenses (
-                tenant_id TEXT,
-                user_id TEXT,
-                license_id TEXT,
-                user_principal_name TEXT,
-                is_active INTEGER DEFAULT 1,
-                assigned_date TEXT,
-                unassigned_date TEXT,
-                license_display_name TEXT,
-                license_partnumber TEXT,
-                monthly_cost REAL DEFAULT 0,
-                last_update TEXT,
-                PRIMARY KEY (tenant_id, user_id, license_id)
+            CREATE TABLE IF NOT EXISTS user_licensesV2 (
+                user_id TEXT(50) NOT NULL,
+                tenant_id TEXT(50) NOT NULL,
+                license_id TEXT(255) NOT NULL,
+                user_principal_name TEXT(255) NOT NULL,
+                license_display_name TEXT(255) NOT NULL,
+                license_partnumber TEXT(100),
+                is_active INTEGER NOT NULL DEFAULT 1,
+                unassigned_date TEXT, -- ISO datetime format
+                monthly_cost REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id, tenant_id, license_id)
             )
         """
         )
@@ -113,24 +162,43 @@ def init_schema():
                 role_display_name TEXT,
                 role_description TEXT,
                 member_count INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (tenant_id, role_id)
             )
         """
         )
 
         # User roles table
+        # cursor.execute(
+        #     """
+        #     CREATE TABLE IF NOT EXISTS user_roles (
+        #         tenant_id TEXT,
+        #         user_id TEXT,
+        #         role_id TEXT,
+        #         user_principal_name TEXT,
+        #         role_display_name TEXT,
+        #         role_description TEXT,
+        #         assigned_date TEXT,
+        #         synced_at TEXT,
+        #         PRIMARY KEY (tenant_id, user_id, role_id)
+        #     )
+        # """
+        # )
+
+        # User roles table V2
         cursor.execute(
             """
-            CREATE TABLE IF NOT EXISTS user_roles (
-                tenant_id TEXT,
-                user_id TEXT,
-                role_id TEXT,
-                user_principal_name TEXT,
-                role_display_name TEXT,
-                role_description TEXT,
-                assigned_date TEXT,
-                synced_at TEXT,
-                PRIMARY KEY (tenant_id, user_id, role_id)
+            CREATE TABLE IF NOT EXISTS user_rolesV2 (
+                user_id TEXT(50) NOT NULL,
+                tenant_id TEXT(50) NOT NULL,
+                role_id TEXT(255) NOT NULL,
+                user_principal_name TEXT(255) NOT NULL,
+                role_display_name TEXT(255) NOT NULL,
+                role_description TEXT(500),
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id, tenant_id, role_id)
             )
         """
         )
@@ -179,12 +247,12 @@ def init_schema():
         """
         )
 
-        # Basic indexes only
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)")
+        # Basic indexes only - V2 tables
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_usersV2_tenant ON usersV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_licenses_tenant ON licenses(tenant_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_licenses_tenant ON user_licenses(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_licensesV2_tenant ON user_licensesV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_roles_tenant ON roles(tenant_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_roles_tenant ON user_roles(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_rolesV2_tenant ON user_rolesV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_policies_tenant ON policies(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_users_tenant ON policy_users(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_users_policy ON policy_users(policy_id)")
@@ -277,4 +345,4 @@ def execute_query(sql, params=None):
 
 
 # Schema will be initialized when sync functions are called
-# init_schema()
+init_schema()

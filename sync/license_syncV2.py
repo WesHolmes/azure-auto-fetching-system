@@ -1,8 +1,8 @@
 from datetime import UTC, datetime, timedelta
 import logging
 
-from core.database import execute_query, query, upsert_many
-from core.graph_client import GraphClient
+from core.databaseV2 import execute_query, init_schema, query, upsert_many
+from core.graph_beta_client import GraphBetaClient
 
 
 logger = logging.getLogger(__name__)
@@ -12,7 +12,7 @@ def fetch_tenant_licenses(tenant_id):
     """Fetch tenant-level license information"""
     try:
         logger.info(f"Fetching tenant licenses for {tenant_id}")
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         # Test with no top parameter to see if that's the issue
         licenses = graph.get("/subscribedSkus")
@@ -31,7 +31,7 @@ def fetch_tenant_licenses(tenant_id):
 def fetch_user_license_details(tenant_id, user_id):
     """Fetch detailed license information for a specific user"""
     try:
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
         license_details = graph.get(
             f"/users/{user_id}/licenseDetails",
             select=["skuId", "skuPartNumber", "servicePlans"],
@@ -112,6 +112,10 @@ def get_sku_display_name(sku_part_number: str) -> str:
 
 def sync_licenses(tenant_id, tenant_name):
     """Sync both tenant licenses and user license assignments"""
+
+    # Initialize database schema
+    init_schema()
+
     try:
         logger.info(f"Starting license sync for {tenant_name}")
 
@@ -139,7 +143,8 @@ def sync_licenses(tenant_id, tenant_name):
                     "warning_count": prepaid_units.get("warning", 0),
                     "suspended_count": prepaid_units.get("suspended", 0),
                     "monthly_cost": estimate_license_cost(sku_part_number),
-                    "last_update": datetime.now().isoformat(),
+                    "created_at": datetime.now().isoformat(),
+                    "last_updated": datetime.now().isoformat(),
                 }
                 license_records.append(license_data)
                 license_lookup[lic.get("skuId")] = license_data
@@ -150,7 +155,7 @@ def sync_licenses(tenant_id, tenant_name):
 
         # Fetch ALL users with licenses (not just active ones)
         logger.info(f"Fetching user license assignments for {tenant_id}")
-        graph = GraphClient(tenant_id)
+        graph = GraphBetaClient(tenant_id)
 
         # Get all users, not filtered - include accountEnabled to detect inactive users
         all_users = graph.get(
@@ -206,15 +211,15 @@ def sync_licenses(tenant_id, tenant_name):
                         # Get user's last sign-in from users table
                         user_activity = query(
                             """
-                            SELECT last_sign_in 
-                            FROM users 
-                            WHERE id = ? AND tenant_id = ?
+                            SELECT last_sign_in_date 
+                            FROM usersV2 
+                            WHERE user_id = ? AND tenant_id = ?
                         """,
                             (user_id, tenant_id),
                         )
 
                         if user_activity:
-                            last_sign_in = user_activity[0].get("last_sign_in")
+                            last_sign_in = user_activity[0].get("last_sign_in_date")
                             if last_sign_in:
                                 try:
                                     last_signin_date = datetime.fromisoformat(last_sign_in)
@@ -236,18 +241,18 @@ def sync_licenses(tenant_id, tenant_name):
                         "license_id": sku_id,
                         "user_principal_name": upn,
                         "is_active": is_license_active,
-                        "assigned_date": datetime.now().isoformat(),
                         "unassigned_date": None,
                         "license_display_name": get_sku_display_name(sku_part_number),
                         "license_partnumber": sku_part_number,
                         "monthly_cost": estimate_license_cost(sku_part_number),
-                        "last_update": datetime.now().isoformat(),
+                        "created_at": datetime.now().isoformat(),
+                        "last_updated": datetime.now().isoformat(),
                     }
                     user_license_records.append(user_license_record)
 
         # Store user licenses
         if user_license_records:
-            upsert_many("user_licenses", user_license_records)
+            upsert_many("user_licensesV2", user_license_records)
             logger.info(f"Stored {len(user_license_records)} user license assignments from {users_with_licenses} users")
 
         # Check for users who previously had licenses but no longer have assignments
@@ -255,7 +260,7 @@ def sync_licenses(tenant_id, tenant_name):
         existing_license_users = query(
             """
             SELECT DISTINCT user_id, user_principal_name 
-            FROM user_licenses 
+            FROM user_licensesV2 
             WHERE tenant_id = ?
         """,
             (tenant_id,),
@@ -272,9 +277,9 @@ def sync_licenses(tenant_id, tenant_name):
         # For these users, check if they're now inactive and mark their licenses accordingly
         if users_to_check:
             user_status_query = f"""
-                SELECT id, account_enabled, user_principal_name
-                FROM users 
-                WHERE id IN ({",".join(["?" for _ in users_to_check])})
+                SELECT user_id, account_enabled, user_principal_name
+                FROM usersV2 
+                WHERE user_id IN ({",".join(["?" for _ in users_to_check])})
                 AND tenant_id = ?
             """
             user_statuses = query(user_status_query, users_to_check + [tenant_id])
@@ -284,16 +289,16 @@ def sync_licenses(tenant_id, tenant_name):
                     # Update their existing license records to mark as inactive
                     execute_query(
                         """
-                        UPDATE user_licenses 
+                        UPDATE user_licensesV2 
                         SET is_active = 0, 
                             unassigned_date = ?,
-                            last_update = ?
+                            last_updated = ?
                         WHERE user_id = ? AND tenant_id = ? AND is_active = 1
                     """,
                         (
                             datetime.now().isoformat(),
                             datetime.now().isoformat(),
-                            user_status["id"],
+                            user_status["user_id"],
                             tenant_id,
                         ),
                     )

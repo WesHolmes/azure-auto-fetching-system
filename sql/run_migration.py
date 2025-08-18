@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Database migration script to add office_location and mobile_phone columns to usersV2 table.
+Database migration script to add office_location and mobile_phone columns to usersV2 table,
+and create groups and user_groupsV2 tables.
 Run this script to update existing databases with the new schema.
 """
 
@@ -10,25 +11,21 @@ import sqlite3
 import sys
 
 
-def run_migration(db_path):
+def run_users_migration(db_path):
     """Run the migration to add new columns to usersV2 table"""
-
-    if not os.path.exists(db_path):
-        print(f"Database file not found: {db_path}")
-        return False
 
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        print(f"Connected to database: {db_path}")
+        print(f"Running users migration on: {db_path}")
 
         # Check if columns already exist
         cursor.execute("PRAGMA table_info(usersV2)")
         columns = [col[1] for col in cursor.fetchall()]
 
         if "office_location" in columns and "mobile_phone" in columns:
-            print("Migration already completed - columns exist")
+            print("Users migration already completed - columns exist")
             return True
 
         # Add office_location column
@@ -49,28 +46,147 @@ def run_migration(db_path):
 
         # Commit changes
         conn.commit()
-        print("✓ Migration completed successfully")
+        print("✓ Users migration completed successfully")
 
         # Verify the new schema
         cursor.execute("PRAGMA table_info(usersV2)")
         columns = [col[1] for col in cursor.fetchall()]
-        print(f"Current columns: {', '.join(columns)}")
+        print(f"Current usersV2 columns: {', '.join(columns)}")
 
         return True
 
     except Exception as e:
-        print(f"Migration failed: {str(e)}")
+        print(f"Users migration failed: {str(e)}")
         return False
     finally:
         if "conn" in locals():
             conn.close()
 
 
+def run_groups_migration(db_path):
+    """Run the migration to add groups and user_groupsV2 tables"""
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        print(f"Running groups migration on: {db_path}")
+
+        # Check if groups table already exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='groups'")
+        groups_exists = cursor.fetchone() is not None
+
+        # Check if user_groupsV2 table already exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_groupsV2'")
+        user_groups_exists = cursor.fetchone() is not None
+
+        if groups_exists and user_groups_exists:
+            print("Groups migration already completed - tables exist")
+            return True
+
+        # Create groups table
+        if not groups_exists:
+            print("Creating groups table...")
+            cursor.execute("""
+                CREATE TABLE groups (
+                    tenant_id TEXT(50) NOT NULL,
+                    group_id TEXT(255) NOT NULL,
+                    group_display_name TEXT(255) NOT NULL,
+                    group_description TEXT(500),
+                    group_type TEXT(100) NOT NULL,
+                    mail_enabled INTEGER NOT NULL DEFAULT 0,
+                    security_enabled INTEGER NOT NULL DEFAULT 1,
+                    mail_nickname TEXT(100),
+                    visibility TEXT(50) DEFAULT 'Private',
+                    member_count INTEGER NOT NULL DEFAULT 0,
+                    owner_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (tenant_id, group_id)
+                )
+            """)
+            print("✓ Created groups table")
+        else:
+            print("groups table already exists")
+
+        # Create user_groupsV2 table
+        if not user_groups_exists:
+            print("Creating user_groupsV2 table...")
+            cursor.execute("""
+                CREATE TABLE user_groupsV2 (
+                    user_id TEXT(50) NOT NULL,
+                    tenant_id TEXT(50) NOT NULL,
+                    group_id TEXT(255) NOT NULL,
+                    user_principal_name TEXT(255) NOT NULL,
+                    group_display_name TEXT(255) NOT NULL,
+                    group_type TEXT(100) NOT NULL,
+                    membership_type TEXT(50) DEFAULT 'Member',
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (user_id, tenant_id, group_id)
+                )
+            """)
+            print("✓ Created user_groupsV2 table")
+        else:
+            print("user_groupsV2 table already exists")
+
+        # Create indexes
+        print("Creating indexes...")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_groups_tenant ON groups(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_groups_type ON groups(group_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_tenant ON user_groupsV2(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_user ON user_groupsV2(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_group ON user_groupsV2(group_id)")
+        print("✓ Created all indexes")
+
+        # Commit changes
+        conn.commit()
+        print("✓ Groups migration completed successfully")
+
+        return True
+
+    except Exception as e:
+        print(f"Groups migration failed: {str(e)}")
+        return False
+    finally:
+        if "conn" in locals():
+            conn.close()
+
+
+def run_migration(db_path):
+    """Run all migrations in sequence"""
+
+    if not os.path.exists(db_path):
+        print(f"Database file not found: {db_path}")
+        return False
+
+    print(f"Starting migrations for: {db_path}")
+    print("=" * 50)
+
+    # Run users migration
+    users_success = run_users_migration(db_path)
+    print()
+
+    # Run groups migration
+    groups_success = run_groups_migration(db_path)
+    print()
+
+    # Overall result
+    if users_success and groups_success:
+        print("=" * 50)
+        print("✓ ALL MIGRATIONS COMPLETED SUCCESSFULLY")
+        return True
+    else:
+        print("=" * 50)
+        print("❌ SOME MIGRATIONS FAILED")
+        return False
+
+
 def main():
-    """Main function to run migration"""
+    """Main function to run all migrations"""
 
     # Look for database files in common locations
-    possible_paths = ["data/users.db", "data/tenant_data.db", "users.db", "tenant_data.db"]
+    possible_paths = ["data/users.db", "data/tenant_data.db", "data/graph_sync.db", "users.db", "tenant_data.db", "graph_sync.db"]
 
     # Also check current directory for .db files
     current_dir = Path(".")
@@ -99,6 +215,8 @@ def main():
                 print(f"Successfully migrated: {db_path}")
             else:
                 print(f"Failed to migrate: {db_path}")
+        else:
+            print("No database path specified.")
 
 
 if __name__ == "__main__":

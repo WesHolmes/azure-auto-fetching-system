@@ -203,6 +203,46 @@ def init_schema():
         """
         )
 
+        # Groups table (tenant-level group definitions)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS groups (
+                tenant_id TEXT(50) NOT NULL,
+                group_id TEXT(255) NOT NULL,
+                group_display_name TEXT(255) NOT NULL,
+                group_description TEXT(500),
+                group_type TEXT(100) NOT NULL,
+                mail_enabled INTEGER NOT NULL DEFAULT 0,
+                security_enabled INTEGER NOT NULL DEFAULT 1,
+                mail_nickname TEXT(100),
+                visibility TEXT(50) DEFAULT 'Private',
+                member_count INTEGER NOT NULL DEFAULT 0,
+                owner_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (tenant_id, group_id)
+            )
+        """
+        )
+
+        # User groups table V2 (user-group assignments)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_groupsV2 (
+                user_id TEXT(50) NOT NULL,
+                tenant_id TEXT(50) NOT NULL,
+                group_id TEXT(255) NOT NULL,
+                user_principal_name TEXT(255) NOT NULL,
+                group_display_name TEXT(255) NOT NULL,
+                group_type TEXT(100) NOT NULL,
+                membership_type TEXT(50) DEFAULT 'Member',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id, tenant_id, group_id)
+            )
+        """
+        )
+
         # Policies table
         cursor.execute(
             """
@@ -253,6 +293,11 @@ def init_schema():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_licensesV2_tenant ON user_licensesV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_roles_tenant ON roles(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_rolesV2_tenant ON user_rolesV2(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_groups_tenant ON groups(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_groups_type ON groups(group_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_tenant ON user_groupsV2(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_user ON user_groupsV2(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_group ON user_groupsV2(group_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_policies_tenant ON policies(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_users_tenant ON policy_users(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_users_policy ON policy_users(policy_id)")

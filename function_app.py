@@ -14,6 +14,7 @@ from core.databaseV2 import execute_query, query, upsert_many
 from core.error_reporting import aggregate_recent_sync_errors, categorize_sync_errors
 from core.graph_beta_client import GraphBetaClient
 from core.tenant_manager import get_tenants
+from sync.group_syncV2 import sync_groups
 
 # from sync.license_sync import sync_licenses
 from sync.license_syncV2 import sync_licenses as sync_licenses_v2
@@ -339,6 +340,49 @@ def role_syncV2(timer: func.TimerRequest) -> None:
         logging.error(f"  V2 Role sync failed: {result.get('error', 'Unknown error')}")
 
 
+@app.schedule(schedule="0 15 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+def group_syncV2(timer: func.TimerRequest) -> None:
+    """V2 Timer trigger for group sync using new database schema"""
+    if timer.past_due:
+        logging.info("Group sync V2 timer is past due!")
+
+    logging.info("Starting scheduled group sync V2")
+    tenants = get_tenants()
+    results = []
+
+    for tenant in tenants:
+        try:
+            result = sync_groups(tenant["tenant_id"], tenant["name"])
+            if result["status"] == "success":
+                logging.info(
+                    f"✓ V2 {tenant['name']}: {result['groups_synced']} groups synced, {result.get('user_groups_synced', 0)} user memberships synced"
+                )
+                results.append(
+                    {
+                        "status": "completed",
+                        "tenant_id": tenant["tenant_id"],
+                        "groups_synced": result["groups_synced"],
+                        "user_groups_synced": result.get("user_groups_synced", 0),
+                    }
+                )
+            else:
+                logging.error(f"✗ V2 {tenant['name']}: {result['error']}")
+                results.append(
+                    {
+                        "status": "error",
+                        "tenant_id": tenant["tenant_id"],
+                        "error": result.get("error", "Unknown error"),
+                    }
+                )
+        except Exception as e:
+            logging.error(f"✗ V2 {tenant['name']}: {str(e)}")
+            results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
+
+    failed_count = len([r for r in results if r["status"] == "error"])
+    if failed_count > 0:
+        categorize_sync_errors(results, "Group V2")
+
+
 @app.schedule(schedule="0 15 0 * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
 def policies_sync(timer: func.TimerRequest) -> None:
     if timer.past_due:
@@ -595,6 +639,49 @@ def policies_sync_http(req: func.HttpRequest) -> func.HttpResponse:
         f"Synced {total_policies} conditional access policies and {total_policy_users} user assignments",
         status_code=200,
     )
+
+
+@app.route(route="sync/groups", methods=["POST"])
+def groups_sync_http(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP POST endpoint for group synchronization across all tenants"""
+    try:
+        from sync.group_syncV2 import sync_groups
+
+        tenants = get_tenants()
+        total_groups = 0
+        total_user_groups = 0
+        error_counts = {}
+
+        for tenant in tenants:
+            try:
+                result = sync_groups(tenant["tenant_id"], tenant["name"])
+                if result["status"] == "success":
+                    total_groups += result["groups_synced"]
+                    total_user_groups += result["user_groups_synced"]
+                else:
+                    # Track error codes from the sync result
+                    error_code = extract_error_code(result["error"])
+                    if error_code:
+                        error_counts[error_code] = error_counts.get(error_code, 0) + 1
+            except Exception as e:
+                logging.error(f"Error syncing groups for {tenant['name']}: {str(e)}")
+                # Track error codes from exceptions
+                error_code = extract_error_code(str(e))
+                if error_code:
+                    error_counts[error_code] = error_counts.get(error_code, 0) + 1
+
+        # Log error summary
+        log_error_summary(error_counts, "Groups HTTP sync")
+
+        return func.HttpResponse(
+            f"Synced {total_groups} groups and {total_user_groups} user-group assignments",
+            status_code=200,
+        )
+
+    except Exception as e:
+        error_msg = f"Group sync failed: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(error_msg, status_code=500)
 
 
 @app.route(route="tenant/users", methods=["GET"])
@@ -1397,49 +1484,28 @@ def get_tenant_groups(req: func.HttpRequest) -> func.HttpResponse:
         logging.info(f"Processing groups data for tenant: {tenant_name}")
 
         # fetch group options for frontend dropdown
-        # Note: This is a simplified implementation - you may need to adjust based on your actual groups table
         group_options_query = """
         SELECT DISTINCT 
             group_id,
-            display_name,
-            description,
-            group_type
+            group_display_name as display_name,
+            group_description as description,
+            group_type,
+            member_count,
+            owner_count,
+            visibility,
+            mail_enabled,
+            security_enabled
         FROM groups 
         WHERE tenant_id = ?
-        ORDER BY display_name
+        ORDER BY group_display_name
         """
 
         try:
             group_options = query(group_options_query, (tenant_id,))
         except Exception as e:
-            # If groups table doesn't exist or query fails, provide default groups
+            # If groups table doesn't exist or query fails, provide empty list
             logging.warning(f"Could not fetch groups from database: {str(e)}")
-            group_options = [
-                {
-                    "group_id": "all-users",
-                    "display_name": "All Users",
-                    "description": "Default group for all users",
-                    "group_type": "Security",
-                },
-                {
-                    "group_id": "it-department",
-                    "display_name": "IT Department",
-                    "description": "IT staff and administrators",
-                    "group_type": "Security",
-                },
-                {
-                    "group_id": "sales-department",
-                    "display_name": "Sales Department",
-                    "description": "Sales team members",
-                    "group_type": "Security",
-                },
-                {
-                    "group_id": "marketing-department",
-                    "display_name": "Marketing Department",
-                    "description": "Marketing team members",
-                    "group_type": "Security",
-                },
-            ]
+            group_options = []
 
         # build response structure
         response_data = {
@@ -1458,6 +1524,136 @@ def get_tenant_groups(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         error_msg = f"Error retrieving groups data: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(
+            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
+        )
+
+
+@app.route(route="tenant/groups/{group_id}/members", methods=["GET"])
+def get_group_members_http(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint to get members of a specific group"""
+    try:
+        # extract group_id from URL path
+        group_id = req.route_params.get("group_id")
+
+        # extract & validate tenant id
+        tenant_id = req.params.get("tenant_id")
+        logging.info(f"Group members API request for group: {group_id} in tenant: {tenant_id}")
+
+        if not group_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "group_id is required in URL path"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        tenant_name = tenant_names[tenant_id]
+
+        # fetch group members
+        from sync.group_syncV2 import get_group_members
+
+        members = get_group_members(tenant_id, group_id)
+
+        # build response structure
+        response_data = {
+            "success": True,
+            "data": {"group_id": group_id, "members": members, "total_members": len(members)},
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "timestamp": datetime.now().isoformat(),
+                "endpoint": "get_group_members",
+            },
+        }
+
+        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+
+    except Exception as e:
+        error_msg = f"Error retrieving group members: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(
+            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
+        )
+
+
+@app.route(route="tenant/users/{user_id}/groups", methods=["GET"])
+def get_user_groups_http(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint to get all groups for a specific user"""
+    try:
+        # extract user_id from URL path
+        user_id = req.route_params.get("user_id")
+
+        # extract & validate tenant id
+        tenant_id = req.params.get("tenant_id")
+        logging.info(f"User groups API request for user: {user_id} in tenant: {tenant_id}")
+
+        if not user_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_id is required in URL path"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # check if tenant exists
+        tenants = get_tenants()
+        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+
+        if tenant_id not in tenant_names:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        tenant_name = tenant_names[tenant_id]
+
+        # fetch user groups
+        from sync.group_syncV2 import get_user_groups
+
+        groups = get_user_groups(tenant_id, user_id)
+
+        # build response structure
+        response_data = {
+            "success": True,
+            "data": {"user_id": user_id, "groups": groups, "total_groups": len(groups)},
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "timestamp": datetime.now().isoformat(),
+                "endpoint": "get_user_groups",
+            },
+        }
+
+        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+
+    except Exception as e:
+        error_msg = f"Error retrieving user groups: {str(e)}"
         logging.error(error_msg)
         return func.HttpResponse(
             json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}

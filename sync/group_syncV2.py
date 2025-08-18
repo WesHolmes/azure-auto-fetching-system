@@ -236,6 +236,16 @@ def sync_groups(tenant_id, tenant_name):
             upsert_many("user_groupsV2", user_group_records)
             logger.info(f"Stored {len(user_group_records)} user group assignments from {groups_with_members} groups")
 
+        # Count total memberships after sync (including existing ones)
+        total_memberships = query(
+            """
+            SELECT COUNT(*) as total
+            FROM user_groupsV2 
+            WHERE tenant_id = ?
+        """,
+            (tenant_id,),
+        )[0]["total"]
+
         # Update group member/owner counts in groups table
         update_group_counts(tenant_id)
 
@@ -286,7 +296,7 @@ def sync_groups(tenant_id, tenant_name):
         return {
             "status": "success",
             "groups_synced": len(group_records) if "group_records" in locals() else 0,
-            "user_groups_synced": len(user_group_records),
+            "user_groups_synced": total_memberships,
             "inactive_users_cleaned": len(users_to_check) if users_to_check else 0,
         }
 

@@ -684,6 +684,124 @@ def groups_sync_http(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(error_msg, status_code=500)
 
 
+@app.route(route="tenant/users/{user_id}", methods=["GET"])
+def get_tenant_user_by_id(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single user data by user_id"""
+    # Returns individual user details for a specific user in a specific tenant
+
+    try:
+        # extract user_id from URL path
+        user_id = req.route_params.get("user_id")
+        
+        # extract & validate tenant id
+        tenant_id = req.params.get("tenant_id")
+        logging.info(f"User by ID API request for user: {user_id} in tenant: {tenant_id}")
+
+        if not user_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "user_id is required in URL path"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # Single Graph API call - much faster
+        graph_client = GraphBetaClient(tenant_id)
+        tenant_details = graph_client.get_tenant_details(tenant_id)
+
+        # Handle the fact that get_tenant_details returns a list
+        if tenant_details and len(tenant_details) > 0:
+            tenant_name = tenant_details[0].get("displayName", tenant_id)
+        else:
+            tenant_name = tenant_id
+
+        logging.info(f"Processing user data for user {user_id} in tenant: {tenant_name}")
+
+        # fetch specific user data
+        user_query = """
+            SELECT 
+                user_id,
+                user_principal_name,
+                primary_email,
+                display_name,
+                department,
+                job_title,
+                office_location,
+                mobile_phone,
+                account_type,
+                account_enabled,
+                is_global_admin,
+                is_mfa_compliant,
+                license_count,
+                group_count,
+                last_sign_in_date,
+                last_password_change,
+                created_at,
+                last_updated
+            FROM usersV2 
+            WHERE tenant_id = ? AND user_id = ?
+        """
+        user_result = query(user_query, (tenant_id, user_id))
+
+        if not user_result:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": f"User {user_id} not found in tenant {tenant_id}"}),
+                status_code=404,
+                headers={"Content-Type": "application/json"},
+            )
+
+        user = user_result[0]
+
+        # transform user data for frontend consumption
+        user_data = {
+            "user_id": user["user_id"],
+            "user_principal_name": user["user_principal_name"],
+            "primary_email": user["primary_email"],
+            "display_name": user["display_name"],
+            "department": user["department"],
+            "job_title": user["job_title"],
+            "office_location": user["office_location"],
+            "mobile_phone": user["mobile_phone"],
+            "account_type": user["account_type"],
+            "account_enabled": bool(user["account_enabled"]),
+            "is_global_admin": bool(user["is_global_admin"]),
+            "is_mfa_compliant": bool(user["is_mfa_compliant"]),
+            "license_count": user["license_count"],
+            "group_count": user["group_count"],
+            "last_sign_in_date": user["last_sign_in_date"],
+            "last_password_change": user["last_password_change"],
+            "created_at": user["created_at"],
+            "last_updated": user["last_updated"],
+        }
+
+        # build response structure
+        response_data = {
+            "success": True,
+            "data": user_data,
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat(),
+            },
+        }
+
+        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+
+    except Exception as e:
+        error_msg = f"Error retrieving user data: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(
+            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
+        )
+
+
 @app.route(route="tenant/users", methods=["GET"])
 def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP GET endpoint for single tenant user data"""
@@ -701,18 +819,16 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
                 headers={"Content-Type": "application/json"},
             )
 
-        # check if tenant exists
-        tenants = get_tenants()
-        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        # single Graph API call - much faster
+        graph_client = GraphBetaClient(tenant_id)
+        tenant_details = graph_client.get_tenant_details(tenant_id)
 
-        if tenant_id not in tenant_names:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
+        # handle fact get_tenant_details returns a list
+        if tenant_details and len(tenant_details) > 0:
+            tenant_name = tenant_details[0].get("displayName", tenant_id)
+        else:
+            tenant_name = tenant_id
 
-        tenant_name = tenant_names[tenant_id]
         logging.info(f"Processing user data for tenant: {tenant_name}")
 
         # grab user data

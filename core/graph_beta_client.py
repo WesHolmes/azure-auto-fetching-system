@@ -139,7 +139,7 @@ class GraphBetaClient:
     def get_tenant_details(self, tenant_id):
         data = self.get(f"/organization/{tenant_id}")
         return data
-    
+
     def create_user(self, user_data):
         """Create a new user account via Microsoft Graph Beta API"""
 

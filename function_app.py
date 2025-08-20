@@ -16,6 +16,7 @@ from core.tenant_manager import get_tenants
 from sync.group_syncV2 import sync_groups
 from sync.license_syncV2 import sync_licenses as sync_licenses_v2
 from sync.role_syncV2 import sync_roles_for_tenants as sync_roles_for_tenants_v2
+from sync.subscription_syncV2 import sync_subscriptions
 from sync.user_syncV2 import sync_users as sync_users_v2
 
 
@@ -187,6 +188,46 @@ def group_syncV2(timer: func.TimerRequest) -> None:
         categorize_sync_errors(results, "Group V2")
 
 
+@app.schedule(schedule="0 45 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+def subscription_syncV2(timer: func.TimerRequest) -> None:
+    """V2 Timer trigger for subscription sync using new database schema"""
+    if timer.past_due:
+        logging.info("Subscription sync V2 timer is past due!")
+
+    logging.info("Starting scheduled subscription sync V2")
+    tenants = get_tenants()
+    results = []
+
+    for tenant in tenants:
+        try:
+            result = sync_subscriptions(tenant["tenant_id"], tenant["name"])
+            if result["status"] == "success":
+                logging.info(f"✓ V2 {tenant['name']}: {result['subscriptions_synced']} subscriptions synced")
+                results.append(
+                    {
+                        "status": "completed",
+                        "tenant_id": tenant["tenant_id"],
+                        "subscriptions_synced": result["subscriptions_synced"],
+                    }
+                )
+            else:
+                logging.error(f"✗ V2 {tenant['name']}: {result['error']}")
+                results.append(
+                    {
+                        "status": "error",
+                        "tenant_id": tenant["tenant_id"],
+                        "error": result.get("error", "Unknown error"),
+                    }
+                )
+        except Exception as e:
+            logging.error(f"✗ V2 {tenant['name']}: {str(e)}")
+            results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
+
+    failed_count = len([r for r in results if r["status"] == "error"])
+    if failed_count > 0:
+        categorize_sync_errors(results, "Subscription V2")
+
+
 # HTTP TRIGGERS (Manual Endpoints)
 
 
@@ -342,6 +383,45 @@ def groups_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         error_msg = f"Group sync failed: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(error_msg, status_code=500)
+
+
+@app.route(route="sync/subscriptions", methods=["POST"])
+def subscriptions_sync_http(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP POST endpoint for subscription synchronization across all tenants"""
+    try:
+        tenants = get_tenants()
+        total_subscriptions = 0
+        error_counts = {}
+
+        for tenant in tenants:
+            try:
+                result = sync_subscriptions(tenant["tenant_id"], tenant["name"])
+                if result["status"] == "success":
+                    total_subscriptions += result["subscriptions_synced"]
+                else:
+                    # Track error codes from the sync result
+                    error_code = extract_error_code(result["error"])
+                    if error_code:
+                        error_counts[error_code] = error_counts.get(error_code, 0) + 1
+            except Exception as e:
+                logging.error(f"Error syncing subscriptions for {tenant['name']}: {str(e)}")
+                # Track error codes from exceptions
+                error_code = extract_error_code(str(e))
+                if error_code:
+                    error_counts[error_code] = error_counts.get(error_code, 0) + 1
+
+        # Log error summary
+        log_error_summary(error_counts, "Subscriptions HTTP sync")
+
+        return func.HttpResponse(
+            f"Synced {total_subscriptions} subscriptions",
+            status_code=200,
+        )
+
+    except Exception as e:
+        error_msg = f"Subscription sync failed: {str(e)}"
         logging.error(error_msg)
         return func.HttpResponse(error_msg, status_code=500)
 

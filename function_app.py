@@ -231,115 +231,155 @@ def subscription_syncV2(timer: func.TimerRequest) -> None:
 # HTTP TRIGGERS (Manual Endpoints)
 
 
-# @app.route(route="sync/usersV2", methods=["POST"])
-# def user_sync_v2_http(req: func.HttpRequest) -> func.HttpResponse:
-#     """Manual trigger for V2 user sync"""
-#     tenants = get_tenants()
-#     total = 0
-#     results = []
+@app.route(route="sync/usersV2", methods=["POST"])
+def user_sync_v2_http(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP POST endpoint for user synchronization across all tenants"""
+    try:
+        logging.info("Starting manual user sync V2")
+        from sync.user_syncV2 import sync_users as sync_users_v2
 
-#     for tenant in tenants:
-#         try:
-#             result = sync_users_v2(tenant["tenant_id"], tenant["name"])
-#             if result["status"] == "success":
-#                 total += result["users_synced"]
-#                 results.append(
-#                     {
-#                         "status": "completed",
-#                         "tenant_id": tenant["tenant_id"],
-#                         "users_synced": result["users_synced"],
-#                         "user_licenses_synced": result.get("user_licenses_synced", 0),
-#                     }
-#                 )
-#             else:
-#                 results.append(
-#                     {
-#                         "status": "error",
-#                         "tenant_id": tenant["tenant_id"],
-#                         "error": result.get("error", "Unknown error"),
-#                     }
-#                 )
-#         except Exception as e:
-#             logging.error(f"Error syncing users V2 for {tenant['name']}: {str(e)}")
-#             results.append(
-#                 {"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)}
-#             )
+        tenants = get_tenants()
+        total_users = 0
+        total_licenses = 0
+        results = []
 
-#     failed_count = len([r for r in results if r["status"] == "error"])
-#     if failed_count > 0:
-#         categorize_sync_errors(results, "User V2")
+        for tenant in tenants:
+            try:
+                result = sync_users_v2(tenant["tenant_id"], tenant["name"])
+                if result["status"] == "success":
+                    logging.info(
+                        f"✓ {tenant['name']}: {result['users_synced']} users, {result.get('user_licenses_synced', 0)} license assignments synced"
+                    )
+                    total_users += result["users_synced"]
+                    total_licenses += result.get("user_licenses_synced", 0)
+                    results.append(
+                        {
+                            "status": "completed",
+                            "tenant_id": tenant["tenant_id"],
+                            "users_synced": result["users_synced"],
+                            "user_licenses_synced": result.get("user_licenses_synced", 0),
+                        }
+                    )
+                else:
+                    logging.error(f"✗ {tenant['name']}: {result['error']}")
+                    results.append(
+                        {
+                            "status": "error",
+                            "tenant_id": tenant["tenant_id"],
+                            "error": result.get("error", "Unknown error"),
+                        }
+                    )
+            except Exception as e:
+                logging.error(f"✗ {tenant['name']}: {str(e)}")
+                results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
-#     return func.HttpResponse(f"Synced {total} users (V2)", status_code=200)
+        # Use centralized error reporting (same pattern as other sync functions)
+        failed_count = len([r for r in results if r["status"] == "error"])
+        if failed_count > 0:
+            categorize_sync_errors(results, "User V2 HTTP")
+
+        return func.HttpResponse(
+            f"Synced {total_users} users and {total_licenses} license assignments across {len(tenants)} tenants",
+            status_code=200,
+        )
+
+    except Exception as e:
+        error_msg = f"User sync V2 failed: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(error_msg, status_code=500)
 
 
 @app.route(route="sync/licenses", methods=["POST"])
 def license_sync_http(req: func.HttpRequest) -> func.HttpResponse:
-    tenants = get_tenants()
-    total_licenses = 0
-    total_assignments = 0
-    results = []
+    """HTTP POST endpoint for license synchronization across all tenants"""
+    try:
+        logging.info("Starting manual license sync")
+        from sync.license_syncV2 import sync_licenses as sync_licenses_v2
 
-    for tenant in tenants:
-        try:
-            result = sync_licenses(tenant["tenant_id"], tenant["name"])
-            if result["status"] == "success":
-                total_licenses += result["licenses_synced"]
-                total_assignments += result["user_licenses_synced"]
-                results.append(
-                    {
-                        "status": "completed",
-                        "tenant_id": tenant["tenant_id"],
-                        "licenses_synced": result["licenses_synced"],
-                        "user_licenses_synced": result["user_licenses_synced"],
-                    }
-                )
-            else:
-                results.append(
-                    {
-                        "status": "error",
-                        "tenant_id": tenant["tenant_id"],
-                        "error": result.get("error", "Unknown error"),
-                    }
-                )
-        except Exception as e:
-            logging.error(f"Error syncing licenses for {tenant['name']}: {str(e)}")
-            results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
+        tenants = get_tenants()
+        total_licenses = 0
+        total_assignments = 0
+        results = []
 
-    failed_count = len([r for r in results if r["status"] == "error"])
-    if failed_count > 0:
-        categorize_sync_errors(results, "License")
+        for tenant in tenants:
+            try:
+                result = sync_licenses_v2(tenant["tenant_id"], tenant["name"])
+                if result["status"] == "success":
+                    logging.info(
+                        f"✓ {tenant['name']}: {result['licenses_synced']} licenses, {result.get('user_licenses_synced', 0)} user assignments synced"
+                    )
+                    total_licenses += result["licenses_synced"]
+                    total_assignments += result["user_licenses_synced"]
+                    results.append(
+                        {
+                            "status": "completed",
+                            "tenant_id": tenant["tenant_id"],
+                            "licenses_synced": result["licenses_synced"],
+                            "user_licenses_synced": result["user_licenses_synced"],
+                        }
+                    )
+                else:
+                    logging.error(f"✗ {tenant['name']}: {result['error']}")
+                    results.append(
+                        {
+                            "status": "error",
+                            "tenant_id": tenant["tenant_id"],
+                            "error": result.get("error", "Unknown error"),
+                        }
+                    )
+            except Exception as e:
+                logging.error(f"✗ {tenant['name']}: {str(e)}")
+                results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
-    return func.HttpResponse(
-        f"Synced {total_licenses} licenses and {total_assignments} user assignments",
-        status_code=200,
-    )
+        # Use centralized error reporting (same pattern as other sync functions)
+        failed_count = len([r for r in results if r["status"] == "error"])
+        if failed_count > 0:
+            categorize_sync_errors(results, "License HTTP")
+
+        return func.HttpResponse(
+            f"Synced {total_licenses} licenses and {total_assignments} user assignments across {len(tenants)} tenants",
+            status_code=200,
+        )
+
+    except Exception as e:
+        error_msg = f"License sync failed: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(error_msg, status_code=500)
 
 
 @app.route(route="sync/roles", methods=["POST"])
 def role_sync_http(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP trigger for role sync"""
-    logging.info("Starting manual role sync")
-    tenants = get_tenants()
-    tenant_ids = [tenant["tenant_id"] for tenant in tenants]
+    """HTTP POST endpoint for role synchronization across all tenants"""
+    try:
+        logging.info("Starting manual role sync")
+        from sync.role_syncV2 import sync_roles_for_tenants as sync_roles_for_tenants_v2
 
-    result = sync_roles_for_tenants(tenant_ids)
+        tenants = get_tenants()
+        tenant_ids = [tenant["tenant_id"] for tenant in tenants]
 
-    if result["status"] == "completed":
-        successful_tenants = result["successful_tenants"]
-        failed_tenants = result["failed_tenants"]
-        total_roles = result["total_roles_synced"]
-        total_role_assignments = result["total_role_assignments_synced"]
+        result = sync_roles_for_tenants_v2(tenant_ids)
 
-        if failed_tenants > 0:
-            categorize_sync_errors(result["results"], "Role")
+        if result["status"] == "completed":
+            successful_tenants = result["successful_tenants"]
+            failed_tenants = result["failed_tenants"]
+            total_roles = result["total_roles_synced"]
+            total_role_assignments = result["total_role_assignments_synced"]
 
-        response_msg = f"Role sync completed: {total_roles} roles, {total_role_assignments} role assignments synced across {successful_tenants} tenants"
-        if failed_tenants > 0:
-            response_msg += f" ({failed_tenants} tenants failed)"
+            if failed_tenants > 0:
+                categorize_sync_errors(result["results"], "Role")
 
-        return func.HttpResponse(response_msg, status_code=200)
-    else:
-        error_msg = f"Role sync failed: {result.get('error', 'Unknown error')}"
+            response_msg = f"Role sync completed: {total_roles} roles, {total_role_assignments} role assignments synced across {successful_tenants} tenants"
+            if failed_tenants > 0:
+                response_msg += f" ({failed_tenants} tenants failed)"
+
+            return func.HttpResponse(response_msg, status_code=200)
+        else:
+            error_msg = f"Role sync failed: {result.get('error', 'Unknown error')}"
+            logging.error(error_msg)
+            return func.HttpResponse(error_msg, status_code=500)
+
+    except Exception as e:
+        error_msg = f"Role sync failed: {str(e)}"
         logging.error(error_msg)
         return func.HttpResponse(error_msg, status_code=500)
 
@@ -348,36 +388,50 @@ def role_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 def groups_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP POST endpoint for group synchronization across all tenants"""
     try:
+        logging.info("Starting manual group sync")
         from sync.group_syncV2 import sync_groups
 
         tenants = get_tenants()
-        total_groups = 0
-        total_user_groups = 0
-        error_counts = {}
+        results = []
 
         for tenant in tenants:
             try:
                 result = sync_groups(tenant["tenant_id"], tenant["name"])
                 if result["status"] == "success":
-                    total_groups += result["groups_synced"]
-                    total_user_groups += result["user_groups_synced"]
+                    logging.info(
+                        f"✓ {tenant['name']}: {result['groups_synced']} groups, {result.get('user_groups_synced', 0)} user memberships synced"
+                    )
+                    results.append(
+                        {
+                            "status": "completed",
+                            "tenant_id": tenant["tenant_id"],
+                            "groups_synced": result["groups_synced"],
+                            "user_groups_synced": result.get("user_groups_synced", 0),
+                        }
+                    )
                 else:
-                    # Track error codes from the sync result
-                    error_code = extract_error_code(result["error"])
-                    if error_code:
-                        error_counts[error_code] = error_counts.get(error_code, 0) + 1
+                    logging.error(f"✗ {tenant['name']}: {result['error']}")
+                    results.append(
+                        {
+                            "status": "error",
+                            "tenant_id": tenant["tenant_id"],
+                            "error": result.get("error", "Unknown error"),
+                        }
+                    )
             except Exception as e:
-                logging.error(f"Error syncing groups for {tenant['name']}: {str(e)}")
-                # Track error codes from exceptions
-                error_code = extract_error_code(str(e))
-                if error_code:
-                    error_counts[error_code] = error_counts.get(error_code, 0) + 1
+                logging.error(f"✗ {tenant['name']}: {str(e)}")
+                results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
-        # Log error summary
-        log_error_summary(error_counts, "Groups HTTP sync")
+        # Use centralized error reporting (same pattern as other sync functions)
+        failed_count = len([r for r in results if r["status"] == "error"])
+        if failed_count > 0:
+            categorize_sync_errors(results, "Groups HTTP")
+
+        total_groups = sum(r.get("groups_synced", 0) for r in results if r["status"] == "completed")
+        total_user_groups = sum(r.get("user_groups_synced", 0) for r in results if r["status"] == "completed")
 
         return func.HttpResponse(
-            f"Synced {total_groups} groups and {total_user_groups} user-group assignments",
+            f"Synced {total_groups} groups and {total_user_groups} user-group assignments across {len(tenants)} tenants",
             status_code=200,
         )
 
@@ -391,32 +445,44 @@ def groups_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 def subscriptions_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP POST endpoint for subscription synchronization across all tenants"""
     try:
+        logging.info("Starting manual subscription sync")
         tenants = get_tenants()
-        total_subscriptions = 0
-        error_counts = {}
+        results = []
 
         for tenant in tenants:
             try:
                 result = sync_subscriptions(tenant["tenant_id"], tenant["name"])
                 if result["status"] == "success":
-                    total_subscriptions += result["subscriptions_synced"]
+                    logging.info(f"✓ {tenant['name']}: {result['subscriptions_synced']} subscriptions synced")
+                    results.append(
+                        {
+                            "status": "completed",
+                            "tenant_id": tenant["tenant_id"],
+                            "subscriptions_synced": result["subscriptions_synced"],
+                        }
+                    )
                 else:
-                    # Track error codes from the sync result
-                    error_code = extract_error_code(result["error"])
-                    if error_code:
-                        error_counts[error_code] = error_counts.get(error_code, 0) + 1
+                    logging.error(f"✗ {tenant['name']}: {result['error']}")
+                    results.append(
+                        {
+                            "status": "error",
+                            "tenant_id": tenant["tenant_id"],
+                            "error": result.get("error", "Unknown error"),
+                        }
+                    )
             except Exception as e:
-                logging.error(f"Error syncing subscriptions for {tenant['name']}: {str(e)}")
-                # Track error codes from exceptions
-                error_code = extract_error_code(str(e))
-                if error_code:
-                    error_counts[error_code] = error_counts.get(error_code, 0) + 1
+                logging.error(f"✗ {tenant['name']}: {str(e)}")
+                results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
-        # Log error summary
-        log_error_summary(error_counts, "Subscriptions HTTP sync")
+        # Use centralized error reporting (same pattern as other sync functions)
+        failed_count = len([r for r in results if r["status"] == "error"])
+        if failed_count > 0:
+            categorize_sync_errors(results, "Subscriptions HTTP")
+
+        total_subscriptions = sum(r.get("subscriptions_synced", 0) for r in results if r["status"] == "completed")
 
         return func.HttpResponse(
-            f"Synced {total_subscriptions} subscriptions",
+            f"Synced {total_subscriptions} subscriptions across {len(tenants)} tenants",
             status_code=200,
         )
 

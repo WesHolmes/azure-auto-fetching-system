@@ -19,30 +19,6 @@ def init_schema():
     cursor = conn.cursor()
 
     try:
-        # # Users table
-        # cursor.execute(
-        #     """
-        #     CREATE TABLE IF NOT EXISTS users (
-        #         id TEXT,
-        #         tenant_id TEXT,
-        #         display_name TEXT,
-        #         user_principal_name TEXT,
-        #         mail TEXT,
-        #         account_enabled BOOLEAN,
-        #         user_type TEXT,
-        #         department TEXT,
-        #         job_title TEXT,
-        #         last_sign_in TEXT,
-        #         is_mfa_compliant BOOLEAN DEFAULT 0,
-        #         license_count INTEGER DEFAULT 0,
-        #         group_count INTEGER DEFAULT 0,
-        #         is_admin BOOLEAN DEFAULT 0,
-        #         synced_at TEXT,
-        #         PRIMARY KEY (id, tenant_id)
-        #     )
-        # """
-        # )
-
         # Users table V2
         cursor.execute(
             """
@@ -71,27 +47,6 @@ def init_schema():
         """
         )
 
-        # Service principals table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS service_principals (
-                id TEXT,
-                tenant_id TEXT,
-                app_id TEXT,
-                display_name TEXT,
-                publisher_name TEXT,
-                service_principal_type TEXT,
-                owners TEXT,
-                credential_exp_date TEXT,
-                credential_type TEXT,
-                enabled_sp BOOLEAN DEFAULT 0,
-                last_sign_in TEXT,
-                synced_at TEXT,
-                PRIMARY KEY (id, tenant_id)
-            )
-        """
-        )
-
         # Licenses table (tenant-level)
         cursor.execute(
             """
@@ -112,26 +67,6 @@ def init_schema():
             )
         """
         )
-
-        # User licenses table
-        # cursor.execute(
-        #     """
-        #     CREATE TABLE IF NOT EXISTS user_licenses (
-        #         tenant_id TEXT,
-        #         user_id TEXT,
-        #         license_id TEXT,
-        #         user_principal_name TEXT,
-        #         is_active INTEGER DEFAULT 1,
-        #         assigned_date TEXT,
-        #         unassigned_date TEXT,
-        #         license_display_name TEXT,
-        #         license_partnumber TEXT,
-        #         monthly_cost REAL DEFAULT 0,
-        #         last_update TEXT,
-        #         PRIMARY KEY (tenant_id, user_id, license_id)
-        #     )
-        # """
-        # )
 
         # User licenses table V2
         cursor.execute(
@@ -168,23 +103,6 @@ def init_schema():
             )
         """
         )
-
-        # User roles table
-        # cursor.execute(
-        #     """
-        #     CREATE TABLE IF NOT EXISTS user_roles (
-        #         tenant_id TEXT,
-        #         user_id TEXT,
-        #         role_id TEXT,
-        #         user_principal_name TEXT,
-        #         role_display_name TEXT,
-        #         role_description TEXT,
-        #         assigned_date TEXT,
-        #         synced_at TEXT,
-        #         PRIMARY KEY (tenant_id, user_id, role_id)
-        #     )
-        # """
-        # )
 
         # User roles table V2
         cursor.execute(
@@ -243,50 +161,6 @@ def init_schema():
         """
         )
 
-        # Policies table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS policies (
-                id TEXT,
-                tenant_id TEXT,
-                display_name TEXT,
-                state BOOLEAN,
-                created_date TEXT,
-                modified_date TEXT,
-                synced_at TEXT,
-                PRIMARY KEY (id, tenant_id)
-            )
-        """
-        )
-
-        # Policy users table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS policy_users (
-                tenant_id TEXT,
-                user_id TEXT,
-                policy_id TEXT,
-                user_principal_name TEXT,
-                synced_at TEXT,
-                PRIMARY KEY (tenant_id, user_id, policy_id)
-            )
-        """
-        )
-
-        # Policy applications table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS policy_applications (
-                tenant_id TEXT,
-                application_id TEXT,
-                policy_id TEXT,
-                application_name TEXT,
-                synced_at TEXT,
-                PRIMARY KEY (tenant_id, application_id, policy_id)
-            )
-        """
-        )
-
         # Basic indexes only - V2 tables
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_usersV2_tenant ON usersV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_licenses_tenant ON licenses(tenant_id)")
@@ -298,11 +172,6 @@ def init_schema():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_tenant ON user_groupsV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_user ON user_groupsV2(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_group ON user_groupsV2(group_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_policies_tenant ON policies(tenant_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_users_tenant ON policy_users(tenant_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_users_policy ON policy_users(policy_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_applications_tenant ON policy_applications(tenant_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_policy_applications_policy ON policy_applications(policy_id)")
 
         conn.commit()
         logger.info("Database schema initialized")

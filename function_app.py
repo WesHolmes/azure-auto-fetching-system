@@ -1387,6 +1387,178 @@ def get_tenant_groups(req: func.HttpRequest) -> func.HttpResponse:
             json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
         )
 
+@app.route(route="tenant/subscriptions", methods=["GET"])
+def get_tenant_subscriptions(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single tenant subscription data"""
+    # Returns structured response with subscription optimization actions
+
+    try:
+        # extract & validate tenant id
+        tenant_id = req.params.get("tenant_id")
+        logging.info(f"Subscriptions API request for tenant: {tenant_id}")
+
+        if not tenant_id:
+            return func.HttpResponse(
+                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
+
+        # single Graph API call - much faster
+        graph_client = GraphBetaClient(tenant_id)
+        tenant_details = graph_client.get_tenant_details(tenant_id)
+
+        # handle fact get_tenant_details returns a list
+        if tenant_details and len(tenant_details) > 0:
+            tenant_name = tenant_details[0].get("displayName", tenant_id)
+        else:
+            tenant_name = tenant_id
+
+        logging.info(f"Processing subscription data for tenant: {tenant_name}")
+
+        # grab subscription data
+        # basic subscription counts
+        total_subscriptions_query = "SELECT COUNT(*) as count FROM subscriptions WHERE tenant_id = ?"
+        total_subscriptions_result = query(total_subscriptions_query, (tenant_id,))
+
+        active_subscriptions_query = "SELECT COUNT(*) as count FROM subscriptions WHERE tenant_id = ? AND status = 'Enabled'"
+        active_subscriptions_result = query(active_subscriptions_query, (tenant_id,))
+
+        # trial subscriptions count
+        trial_subscriptions_query = "SELECT COUNT(*) as count FROM subscriptions WHERE tenant_id = ? AND is_trial = 1"
+        trial_subscriptions_result = query(trial_subscriptions_query, (tenant_id,))
+
+        # expiring soon subscriptions (within 30 days)
+        expiring_soon_query = """
+        SELECT COUNT(*) as count FROM subscriptions 
+        WHERE tenant_id = ? AND next_lifecycle_date_time IS NOT NULL 
+        AND date(next_lifecycle_date_time) <= date('now', '+30 days')
+        """
+        expiring_soon_result = query(expiring_soon_query, (tenant_id,))
+
+        # calculate metrics
+        total_subscriptions = total_subscriptions_result[0]["count"] if total_subscriptions_result else 0
+        active_subscriptions = active_subscriptions_result[0]["count"] if active_subscriptions_result else 0
+        trial_subscriptions = trial_subscriptions_result[0]["count"] if trial_subscriptions_result else 0
+        expiring_soon = expiring_soon_result[0]["count"] if expiring_soon_result else 0
+        inactive_subscriptions = total_subscriptions - active_subscriptions
+
+        # fetch actual subscription data for the data field
+        subscriptions_query = """
+            SELECT 
+                subscription_id,
+                commerce_subscription_id,
+                sku_id,
+                sku_part_number,
+                status,
+                is_trial,
+                total_licenses,
+                created_date_time,
+                next_lifecycle_date_time,
+                owner_id,
+                owner_tenant_id,
+                owner_type,
+                created_at,
+                last_updated
+            FROM subscriptions 
+            WHERE tenant_id = ? 
+            ORDER BY sku_part_number
+        """
+        subscriptions_result = query(subscriptions_query, (tenant_id,))
+
+        # transform subscription data for frontend consumption
+        subscriptions_data = []
+        for subscription in subscriptions_result:
+            subscriptions_data.append(
+                {
+                    "subscription_id": subscription["subscription_id"],
+                    "commerce_subscription_id": subscription["commerce_subscription_id"],
+                    "sku_id": subscription["sku_id"],
+                    "sku_part_number": subscription["sku_part_number"],
+                    "status": subscription["status"],
+                    "is_trial": bool(subscription["is_trial"]),
+                    "total_licenses": subscription["total_licenses"],
+                    "created_date_time": subscription["created_date_time"],
+                    "next_lifecycle_date_time": subscription["next_lifecycle_date_time"],
+                    "owner_id": subscription["owner_id"],
+                    "owner_tenant_id": subscription["owner_tenant_id"],
+                    "owner_type": subscription["owner_type"],
+                    "created_at": subscription["created_at"],
+                    "last_updated": subscription["last_updated"],
+                }
+            )
+
+        # generate subscription optimization actions
+        actions = []
+
+        # action 1: trial subscriptions
+        if trial_subscriptions > 0:
+            actions.append(
+                {
+                    "title": "Review Trial Subscriptions",
+                    "description": f"{trial_subscriptions} trial subscriptions - evaluate before expiration",
+                    "action": "review",
+                }
+            )
+
+        # action 2: expiring subscriptions
+        if expiring_soon > 0:
+            actions.append(
+                {
+                    "title": "Renew Expiring Subscriptions",
+                    "description": f"{expiring_soon} subscriptions expiring within 30 days",
+                    "action": "renew",
+                }
+            )
+
+        # action 3: inactive subscriptions
+        if inactive_subscriptions > 0:
+            actions.append(
+                {
+                    "title": "Review Inactive Subscriptions",
+                    "description": f"{inactive_subscriptions} inactive subscriptions - consider cancellation",
+                    "action": "review",
+                }
+            )
+
+        # action 4: license optimization
+        total_licenses = sum(sub.get("total_licenses", 0) for sub in subscriptions_data)
+        if total_licenses > 0:
+            # Check if there are unused licenses (this would require user_licensesV2 data)
+            actions.append(
+                {
+                    "title": "Optimize License Usage",
+                    "description": f"{total_licenses} total licenses - review utilization",
+                    "action": "optimize",
+                }
+            )
+
+        # build response structure
+        response_data = {
+            "success": True,
+            "data": subscriptions_data,  # contains actual subscription records for frontend
+            "metadata": {
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "timestamp": datetime.now().isoformat(),
+                "total_subscriptions": total_subscriptions,
+                "active_subscriptions": active_subscriptions,
+                "inactive_subscriptions": inactive_subscriptions,
+                "trial_subscriptions": trial_subscriptions,
+                "expiring_soon": expiring_soon,
+                "total_licenses": total_licenses,
+            },
+            "actions": actions[:4],  # limit to maximum 4 actions
+        }
+
+        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+
+    except Exception as e:
+        error_msg = f"Error retrieving subscription data: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(
+            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
+        )
 
 @app.route(route="tenant/groups/{group_id}/members", methods=["GET"])
 def get_group_members_http(req: func.HttpRequest) -> func.HttpResponse:

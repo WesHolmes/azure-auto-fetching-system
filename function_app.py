@@ -945,18 +945,16 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
                 headers={"Content-Type": "application/json"},
             )
 
-        # check if tenant exists
-        tenants = get_tenants()
-        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        # single Graph API call - much faster (same pattern as get_tenant_users)
+        graph_client = GraphBetaClient(tenant_id)
+        tenant_details = graph_client.get_tenant_details(tenant_id)
 
-        if tenant_id not in tenant_names:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
+        # handle fact get_tenant_details returns a list
+        if tenant_details and len(tenant_details) > 0:
+            tenant_name = tenant_details[0].get("displayName", tenant_id)
+        else:
+            tenant_name = tenant_id
 
-        tenant_name = tenant_names[tenant_id]
         logging.info(f"Processing license data for tenant: {tenant_name}")
 
         # grab license data
@@ -1094,18 +1092,16 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
                 headers={"Content-Type": "application/json"},
             )
 
-        # check if tenant exists
-        tenants = get_tenants()
-        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        # single Graph API call - much faster (same pattern as get_tenant_users)
+        graph_client = GraphBetaClient(tenant_id)
+        tenant_details = graph_client.get_tenant_details(tenant_id)
 
-        if tenant_id not in tenant_names:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
+        # handle fact get_tenant_details returns a list
+        if tenant_details and len(tenant_details) > 0:
+            tenant_name = tenant_details[0].get("displayName", tenant_id)
+        else:
+            tenant_name = tenant_id
 
-        tenant_name = tenant_names[tenant_id]
         logging.info(f"Processing roles data for tenant: {tenant_name}")
 
         # grab roles data
@@ -1131,7 +1127,6 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
 
         # fetch fresh role data from Microsoft Graph API for frontend dropdown
         try:
-            graph_client = GraphBetaClient(tenant_id)
             # Get fresh role data from Graph API - use directoryRoles instead of directoryRoleTemplates
             # directoryRoles shows only ACTIVE roles in the tenant, not all possible templates
             logging.info(f"Fetching ACTIVE roles from Graph API for tenant {tenant_id}")
@@ -1387,6 +1382,7 @@ def get_tenant_groups(req: func.HttpRequest) -> func.HttpResponse:
             json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
         )
 
+
 @app.route(route="tenant/subscriptions", methods=["GET"])
 def get_tenant_subscriptions(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP GET endpoint for single tenant subscription data"""
@@ -1559,6 +1555,7 @@ def get_tenant_subscriptions(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
         )
+
 
 @app.route(route="tenant/groups/{group_id}/members", methods=["GET"])
 def get_group_members_http(req: func.HttpRequest) -> func.HttpResponse:

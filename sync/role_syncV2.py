@@ -181,7 +181,7 @@ def sync_roles(tenant_id):
         }
 
 
-def sync_roles_for_tenants(tenant_ids):
+def sync_rolesV2(tenant_ids):
     """Sync roles for multiple tenants concurrently"""
     try:
         logger.info(f"Starting role sync for {len(tenant_ids)} tenants")

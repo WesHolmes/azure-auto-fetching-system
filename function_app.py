@@ -15,7 +15,7 @@ from core.graph_beta_client import GraphBetaClient
 from core.tenant_manager import get_tenants
 from sync.group_syncV2 import sync_groups
 from sync.license_syncV2 import sync_licenses as sync_licenses_v2
-from sync.role_syncV2 import sync_roles_for_tenants as sync_roles_for_tenants_v2
+from sync.role_syncV2 import sync_rolesV2
 from sync.subscription_syncV2 import sync_subscriptions
 from sync.user_syncV2 import sync_users as sync_users_v2
 
@@ -40,9 +40,9 @@ def users_syncV2(timer: func.TimerRequest) -> None:
 
     for tenant in tenants:
         try:
-            result = sync_users_v2(tenant["tenant_id"], tenant["name"])
+            result = sync_users_v2(tenant["tenant_id"], tenant["display_name"])
             if result["status"] == "success":
-                logging.info(f"✓ V2 {tenant['name']}: {result['users_synced']} users synced")
+                logging.info(f"✓ V2 {tenant['display_name']}: {result['users_synced']} users synced")
                 results.append(
                     {
                         "status": "completed",
@@ -64,7 +64,7 @@ def users_syncV2(timer: func.TimerRequest) -> None:
                     logging.error(f"Analysis error: {str(e)}")
 
             else:
-                logging.error(f"✗ V2 {tenant['name']}: {result['error']}")
+                logging.error(f"✗ V2 {tenant['display_name']}: {result['error']}")
                 results.append(
                     {
                         "status": "error",
@@ -73,7 +73,7 @@ def users_syncV2(timer: func.TimerRequest) -> None:
                     }
                 )
         except Exception as e:
-            logging.error(f"✗ V2 {tenant['name']}: {str(e)}")
+            logging.error(f"✗ V2 {tenant['display_name']}: {str(e)}")
             results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
     # Use centralized error reporting
@@ -93,9 +93,9 @@ def licenses_syncV2(timer: func.TimerRequest) -> None:
 
     for tenant in tenants:
         try:
-            result = sync_licenses_v2(tenant["tenant_id"], tenant["name"])
+            result = sync_licenses_v2(tenant["tenant_id"], tenant["display_name"])
             if result["status"] == "success":
-                logging.info(f"✓ V2 {tenant['name']}: {result['licenses_synced']} licenses synced")
+                logging.info(f"✓ V2 {tenant['display_name']}: {result['licenses_synced']} licenses synced")
                 results.append(
                     {
                         "status": "completed",
@@ -106,7 +106,7 @@ def licenses_syncV2(timer: func.TimerRequest) -> None:
                     }
                 )
             else:
-                logging.error(f"✗ V2 {tenant['name']}: {result['error']}")
+                logging.error(f"✗ V2 {tenant['display_name']}: {result['error']}")
                 results.append(
                     {
                         "status": "error",
@@ -115,7 +115,7 @@ def licenses_syncV2(timer: func.TimerRequest) -> None:
                     }
                 )
         except Exception as e:
-            logging.error(f"✗ V2 {tenant['name']}: {str(e)}")
+            logging.error(f"✗ V2 {tenant['display_name']}: {str(e)}")
             results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
     failed_count = len([r for r in results if r["status"] == "error"])
@@ -133,7 +133,7 @@ def role_syncV2(timer: func.TimerRequest) -> None:
     tenants = get_tenants()
     tenant_ids = [tenant["tenant_id"] for tenant in tenants]
 
-    result = sync_roles_for_tenants_v2(tenant_ids)
+    result = sync_rolesV2(tenant_ids)
 
     if result["status"] == "completed":
         logging.info(
@@ -157,10 +157,10 @@ def group_syncV2(timer: func.TimerRequest) -> None:
 
     for tenant in tenants:
         try:
-            result = sync_groups(tenant["tenant_id"], tenant["name"])
+            result = sync_groups(tenant["tenant_id"], tenant["display_name"])
             if result["status"] == "success":
                 logging.info(
-                    f"✓ V2 {tenant['name']}: {result['groups_synced']} groups synced, {result.get('user_groups_synced', 0)} user memberships synced"
+                    f"✓ V2 {tenant['display_name']}: {result['groups_synced']} groups synced, {result.get('user_groups_synced', 0)} user memberships synced"
                 )
                 results.append(
                     {
@@ -171,7 +171,7 @@ def group_syncV2(timer: func.TimerRequest) -> None:
                     }
                 )
             else:
-                logging.error(f"✗ V2 {tenant['name']}: {result['error']}")
+                logging.error(f"✗ V2 {tenant['display_name']}: {result['error']}")
                 results.append(
                     {
                         "status": "error",
@@ -180,7 +180,7 @@ def group_syncV2(timer: func.TimerRequest) -> None:
                     }
                 )
         except Exception as e:
-            logging.error(f"✗ V2 {tenant['name']}: {str(e)}")
+            logging.error(f"✗ V2 {tenant['display_name']}: {str(e)}")
             results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
     failed_count = len([r for r in results if r["status"] == "error"])
@@ -200,9 +200,9 @@ def subscription_syncV2(timer: func.TimerRequest) -> None:
 
     for tenant in tenants:
         try:
-            result = sync_subscriptions(tenant["tenant_id"], tenant["name"])
+            result = sync_subscriptions(tenant["tenant_id"], tenant["display_name"])
             if result["status"] == "success":
-                logging.info(f"✓ V2 {tenant['name']}: {result['subscriptions_synced']} subscriptions synced")
+                logging.info(f"✓ V2 {tenant['display_name']}: {result['subscriptions_synced']} subscriptions synced")
                 results.append(
                     {
                         "status": "completed",
@@ -211,7 +211,7 @@ def subscription_syncV2(timer: func.TimerRequest) -> None:
                     }
                 )
             else:
-                logging.error(f"✗ V2 {tenant['name']}: {result['error']}")
+                logging.error(f"✗ V2 {tenant['display_name']}: {result['error']}")
                 results.append(
                     {
                         "status": "error",
@@ -220,7 +220,7 @@ def subscription_syncV2(timer: func.TimerRequest) -> None:
                     }
                 )
         except Exception as e:
-            logging.error(f"✗ V2 {tenant['name']}: {str(e)}")
+            logging.error(f"✗ V2 {tenant['display_name']}: {str(e)}")
             results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
     failed_count = len([r for r in results if r["status"] == "error"])
@@ -245,10 +245,10 @@ def user_sync_v2_http(req: func.HttpRequest) -> func.HttpResponse:
 
         for tenant in tenants:
             try:
-                result = sync_users_v2(tenant["tenant_id"], tenant["name"])
+                result = sync_users_v2(tenant["tenant_id"], tenant["display_name"])
                 if result["status"] == "success":
                     logging.info(
-                        f"✓ {tenant['name']}: {result['users_synced']} users, {result.get('user_licenses_synced', 0)} license assignments synced"
+                        f"✓ {tenant['display_name']}: {result['users_synced']} users, {result.get('user_licenses_synced', 0)} license assignments synced"
                     )
                     total_users += result["users_synced"]
                     total_licenses += result.get("user_licenses_synced", 0)
@@ -261,7 +261,7 @@ def user_sync_v2_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
                 else:
-                    logging.error(f"✗ {tenant['name']}: {result['error']}")
+                    logging.error(f"✗ {tenant['display_name']}: {result['error']}")
                     results.append(
                         {
                             "status": "error",
@@ -270,7 +270,7 @@ def user_sync_v2_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
             except Exception as e:
-                logging.error(f"✗ {tenant['name']}: {str(e)}")
+                logging.error(f"✗ {tenant['display_name']}: {str(e)}")
                 results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
         # Use centralized error reporting (same pattern as other sync functions)
@@ -303,10 +303,10 @@ def license_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 
         for tenant in tenants:
             try:
-                result = sync_licenses_v2(tenant["tenant_id"], tenant["name"])
+                result = sync_licenses_v2(tenant["tenant_id"], tenant["display_name"])
                 if result["status"] == "success":
                     logging.info(
-                        f"✓ {tenant['name']}: {result['licenses_synced']} licenses, {result.get('user_licenses_synced', 0)} user assignments synced"
+                        f"✓ {tenant['display_name']}: {result['licenses_synced']} licenses, {result.get('user_licenses_synced', 0)} user assignments synced"
                     )
                     total_licenses += result["licenses_synced"]
                     total_assignments += result["user_licenses_synced"]
@@ -319,7 +319,7 @@ def license_sync_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
                 else:
-                    logging.error(f"✗ {tenant['name']}: {result['error']}")
+                    logging.error(f"✗ {tenant['display_name']}: {result['error']}")
                     results.append(
                         {
                             "status": "error",
@@ -328,7 +328,7 @@ def license_sync_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
             except Exception as e:
-                logging.error(f"✗ {tenant['name']}: {str(e)}")
+                logging.error(f"✗ {tenant['display_name']}: {str(e)}")
                 results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
         # Use centralized error reporting (same pattern as other sync functions)
@@ -352,12 +352,11 @@ def role_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP POST endpoint for role synchronization across all tenants"""
     try:
         logging.info("Starting manual role sync")
-        from sync.role_syncV2 import sync_roles_for_tenants as sync_roles_for_tenants_v2
 
         tenants = get_tenants()
         tenant_ids = [tenant["tenant_id"] for tenant in tenants]
 
-        result = sync_roles_for_tenants_v2(tenant_ids)
+        result = sync_rolesV2(tenant_ids)
 
         if result["status"] == "completed":
             successful_tenants = result["successful_tenants"]
@@ -396,10 +395,10 @@ def groups_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 
         for tenant in tenants:
             try:
-                result = sync_groups(tenant["tenant_id"], tenant["name"])
+                result = sync_groups(tenant["tenant_id"], tenant["display_name"])
                 if result["status"] == "success":
                     logging.info(
-                        f"✓ {tenant['name']}: {result['groups_synced']} groups, {result.get('user_groups_synced', 0)} user memberships synced"
+                        f"✓ {tenant['display_name']}: {result['groups_synced']} groups, {result.get('user_groups_synced', 0)} user memberships synced"
                     )
                     results.append(
                         {
@@ -410,7 +409,7 @@ def groups_sync_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
                 else:
-                    logging.error(f"✗ {tenant['name']}: {result['error']}")
+                    logging.error(f"✗ {tenant['display_name']}: {result['error']}")
                     results.append(
                         {
                             "status": "error",
@@ -419,7 +418,7 @@ def groups_sync_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
             except Exception as e:
-                logging.error(f"✗ {tenant['name']}: {str(e)}")
+                logging.error(f"✗ {tenant['display_name']}: {str(e)}")
                 results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
         # Use centralized error reporting (same pattern as other sync functions)
@@ -451,9 +450,9 @@ def subscriptions_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 
         for tenant in tenants:
             try:
-                result = sync_subscriptions(tenant["tenant_id"], tenant["name"])
+                result = sync_subscriptions(tenant["tenant_id"], tenant["display_name"])
                 if result["status"] == "success":
-                    logging.info(f"✓ {tenant['name']}: {result['subscriptions_synced']} subscriptions synced")
+                    logging.info(f"✓ {tenant['display_name']}: {result['subscriptions_synced']} subscriptions synced")
                     results.append(
                         {
                             "status": "completed",
@@ -462,7 +461,7 @@ def subscriptions_sync_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
                 else:
-                    logging.error(f"✗ {tenant['name']}: {result['error']}")
+                    logging.error(f"✗ {tenant['display_name']}: {result['error']}")
                     results.append(
                         {
                             "status": "error",
@@ -471,7 +470,7 @@ def subscriptions_sync_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
             except Exception as e:
-                logging.error(f"✗ {tenant['name']}: {str(e)}")
+                logging.error(f"✗ {tenant['display_name']}: {str(e)}")
                 results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
         # Use centralized error reporting (same pattern as other sync functions)
@@ -994,15 +993,97 @@ def edit_user(req: func.HttpRequest) -> func.HttpResponse:
         )
 
 
+@app.schedule(schedule="0 25 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+def get_tenant_licenses(timer: func.TimerRequest) -> None:
+    """V2 Timer trigger for licenses analysis across all tenants"""
+    if timer.past_due:
+        logging.warning("Licenses analysis timer is past due!")
+
+    logging.info("Starting scheduled licenses analysis across all tenants")
+    tenants = get_tenants()
+    results = []
+
+    for tenant in tenants:
+        try:
+            tenant_id = tenant["tenant_id"]
+            tenant_name = tenant["display_name"]
+
+            logging.info(f"Analyzing licenses for tenant: {tenant_name}")
+
+            # Query license data for this tenant
+            total_licenses_query = "SELECT COUNT(DISTINCT license_display_name) as count FROM licenses WHERE tenant_id = ?"
+            total_licenses_result = query(total_licenses_query, (tenant_id,))
+
+            total_assignments_query = "SELECT COUNT(*) as count FROM user_licensesV2 WHERE tenant_id = ?"
+            total_assignments_result = query(total_assignments_query, (tenant_id,))
+
+            active_assignments_query = "SELECT COUNT(*) as count FROM user_licensesV2 WHERE tenant_id = ? AND is_active = 1"
+            active_assignments_result = query(active_assignments_query, (tenant_id,))
+
+            total_cost_query = "SELECT SUM(monthly_cost) as total_cost FROM user_licensesV2 WHERE tenant_id = ? AND is_active = 1"
+            total_cost_result = query(total_cost_query, (tenant_id,))
+
+            # Calculate metrics
+            total_licenses = total_licenses_result[0]["count"] if total_licenses_result else 0
+            total_assignments = total_assignments_result[0]["count"] if total_assignments_result else 0
+            active_assignments = active_assignments_result[0]["count"] if active_assignments_result else 0
+            total_cost = total_cost_result[0]["total_cost"] if total_cost_result and total_cost_result[0]["total_cost"] else 0
+
+            # Generate optimization actions
+            actions = []
+            if total_assignments > 0 and active_assignments < total_assignments:
+                inactive_count = total_assignments - active_assignments
+                actions.append(f"Review {inactive_count} inactive license assignments")
+
+            if total_cost > 0:
+                actions.append(f"Monthly cost: ${total_cost:.2f}")
+
+            result = {
+                "status": "completed",
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "total_licenses": total_licenses,
+                "total_assignments": total_assignments,
+                "active_assignments": active_assignments,
+                "total_monthly_cost": total_cost,
+                "actions": actions,
+            }
+
+            logging.info(f"✓ {tenant_name}: {total_licenses} licenses, {active_assignments}/{total_assignments} active assignments")
+            results.append(result)
+
+        except Exception as e:
+            logging.error(f"✗ {tenant['display_name']}: {str(e)}")
+            results.append({"status": "error", "tenant_id": tenant["tenant_id"], "tenant_name": tenant["display_name"], "error": str(e)})
+
+    # Log summary
+    successful_count = len([r for r in results if r["status"] == "completed"])
+    failed_count = len([r for r in results if r["status"] == "error"])
+
+    if failed_count > 0:
+        logging.warning(f"Licenses analysis completed with {failed_count} errors out of {len(tenants)} tenants")
+    else:
+        logging.info(f"✓ Licenses analysis completed successfully for {len(tenants)} tenants")
+
+    # Log total metrics across all tenants
+    total_licenses_all = sum(r.get("total_licenses", 0) for r in results if r["status"] == "completed")
+    total_assignments_all = sum(r.get("total_assignments", 0) for r in results if r["status"] == "completed")
+    total_cost_all = sum(r.get("total_monthly_cost", 0) for r in results if r["status"] == "completed")
+
+    logging.info(
+        f" Total across all tenants: {total_licenses_all} licenses, {total_assignments_all} assignments, ${total_cost_all:.2f} monthly cost"
+    )
+
+
 @app.route(route="tenant/licenses", methods=["GET"])
-def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP GET endpoint for single tenant license data"""
-    # Returns structured response with license options and optimization actions
+def get_tenant_licenses_by_id(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single tenant license analysis"""
+    # Returns structured response with license optimization actions
 
     try:
         # extract & validate tenant id
         tenant_id = req.params.get("tenant_id")
-        logging.info(f"Licenses API request for tenant: {tenant_id}")
+        logging.info(f"Licenses analysis API request for tenant: {tenant_id}")
 
         if not tenant_id:
             return func.HttpResponse(
@@ -1011,7 +1092,7 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
                 headers={"Content-Type": "application/json"},
             )
 
-        # single Graph API call - much faster (same pattern as get_tenant_users)
+        # single Graph API call - much faster (same pattern as get_tenant_subscriptions)
         graph_client = GraphBetaClient(tenant_id)
         tenant_details = graph_client.get_tenant_details(tenant_id)
 
@@ -1021,10 +1102,10 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
         else:
             tenant_name = tenant_id
 
-        logging.info(f"Processing license data for tenant: {tenant_name}")
+        logging.info(f"Processing license analysis for tenant: {tenant_name}")
 
-        # grab license data
-        # total license types
+        # grab license data - simplified queries like get_tenant_subscriptions
+        # basic license counts
         total_licenses_query = "SELECT COUNT(DISTINCT license_display_name) as count FROM licenses WHERE tenant_id = ?"
         total_licenses_result = query(total_licenses_query, (tenant_id,))
 
@@ -1043,22 +1124,30 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
         # grab license optimization data
         license_optimization = calculate_license_optimization(tenant_id)
 
-        # fetch license data from local database for frontend dropdown
-        logging.info(f"Fetching licenses from local database for tenant {tenant_id}")
-
-        license_options_query = """
-        SELECT DISTINCT 
-            license_display_name,
-            license_partnumber,
-            monthly_cost,
-            status
-        FROM licenses 
-        WHERE tenant_id = ?
-        ORDER BY license_display_name
+        # fetch actual license data for the data field (same pattern as subscriptions)
+        licenses_query = """
+            SELECT 
+                license_display_name,
+                license_partnumber,
+                monthly_cost,
+                status
+            FROM licenses 
+            WHERE tenant_id = ? 
+            ORDER BY license_display_name
         """
-        license_options = query(license_options_query, (tenant_id,))
+        licenses_result = query(licenses_query, (tenant_id,))
 
-        logging.info(f"Fetched {len(license_options)} licenses from local database for tenant {tenant_id}")
+        # transform license data for frontend consumption (same pattern as subscriptions)
+        licenses_data = []
+        for license in licenses_result:
+            licenses_data.append(
+                {
+                    "license_display_name": license["license_display_name"],
+                    "license_partnumber": license["license_partnumber"],
+                    "monthly_cost": license["monthly_cost"],
+                    "status": license["status"],
+                }
+            )
 
         # calculate metrics
         total_license_types = total_licenses_result[0]["count"] if total_licenses_result else 0
@@ -1115,7 +1204,7 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
         # build response structure
         response_data = {
             "success": True,
-            "data": license_options,  # now contains actual license options for frontend
+            "data": licenses_data,  # contains actual license records for frontend
             "metadata": {
                 "tenant_id": tenant_id,
                 "tenant_name": tenant_name,
@@ -1134,22 +1223,114 @@ def get_tenant_licenses(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
 
     except Exception as e:
-        error_msg = f"Error retrieving license data: {str(e)}"
+        error_msg = f"Error retrieving license analysis: {str(e)}"
         logging.error(error_msg)
         return func.HttpResponse(
             json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
         )
 
 
+@app.schedule(schedule="0 20 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+def get_tenant_roles(timer: func.TimerRequest) -> None:
+    """V2 Timer trigger for roles analysis across all tenants"""
+    if timer.past_due:
+        logging.warning("Roles analysis timer is past due!")
+
+    logging.info("Starting scheduled roles analysis across all tenants")
+    tenants = get_tenants()
+    results = []
+
+    for tenant in tenants:
+        try:
+            tenant_id = tenant["tenant_id"]
+            tenant_name = tenant["display_name"]
+
+            logging.info(f"Analyzing roles for tenant: {tenant_name}")
+
+            # Query role data for this tenant
+            total_roles_query = "SELECT COUNT(*) as count FROM roles WHERE tenant_id = ?"
+            total_roles_result = query(total_roles_query, (tenant_id,))
+
+            total_assignments_query = "SELECT COUNT(*) as count FROM user_rolesV2 WHERE tenant_id = ?"
+            total_assignments_result = query(total_assignments_query, (tenant_id,))
+
+            users_with_roles_query = "SELECT COUNT(DISTINCT user_id) as count FROM user_rolesV2 WHERE tenant_id = ?"
+            users_with_roles_result = query(users_with_roles_query, (tenant_id,))
+
+            admin_roles_query = "SELECT COUNT(*) as count FROM roles WHERE tenant_id = ? AND (role_display_name LIKE '%Admin%' OR role_display_name LIKE '%Administrator%')"
+            admin_roles_result = query(admin_roles_query, (tenant_id,))
+
+            multi_role_users_query = "SELECT COUNT(*) as count FROM (SELECT user_id FROM user_rolesV2 WHERE tenant_id = ? GROUP BY user_id HAVING COUNT(role_id) > 1)"
+            multi_role_users_result = query(multi_role_users_query, (tenant_id,))
+
+            # Calculate metrics
+            total_roles = total_roles_result[0]["count"] if total_roles_result else 0
+            total_assignments = total_assignments_result[0]["count"] if total_assignments_result else 0
+            users_with_roles = users_with_roles_result[0]["count"] if users_with_roles_result else 0
+            admin_roles = admin_roles_result[0]["count"] if admin_roles_result else 0
+            multi_role_users = multi_role_users_result[0]["count"] if multi_role_users_result else 0
+
+            # Generate optimization actions
+            actions = []
+            if admin_roles > 0:
+                actions.append(f"Review {admin_roles} admin roles for security")
+
+            if multi_role_users > 0:
+                actions.append(f"Review {multi_role_users} users with multiple roles")
+
+            if total_assignments > 0 and users_with_roles > 0:
+                avg_roles_per_user = total_assignments / users_with_roles
+                if avg_roles_per_user > 2:
+                    actions.append(f"High role density: {avg_roles_per_user:.1f} roles per user")
+
+            result = {
+                "status": "completed",
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "total_roles": total_roles,
+                "total_assignments": total_assignments,
+                "users_with_roles": users_with_roles,
+                "admin_roles": admin_roles,
+                "multi_role_users": multi_role_users,
+                "actions": actions,
+            }
+
+            logging.info(f"✓ {tenant_name}: {total_roles} roles, {users_with_roles} users, {admin_roles} admin roles")
+            results.append(result)
+
+        except Exception as e:
+            logging.error(f"✗ {tenant['display_name']}: {str(e)}")
+            results.append({"status": "error", "tenant_id": tenant["tenant_id"], "tenant_name": tenant["display_name"], "error": str(e)})
+
+    # Log summary
+    successful_count = len([r for r in results if r["status"] == "completed"])
+    failed_count = len([r for r in results if r["status"] == "error"])
+
+    if failed_count > 0:
+        logging.warning(f"Roles analysis completed with {failed_count} errors out of {len(tenants)} tenants")
+    else:
+        logging.info(f"✓ Roles analysis completed successfully for {len(tenants)} tenants")
+
+    # Log total metrics across all tenants
+    total_roles_all = sum(r.get("total_roles", 0) for r in results if r["status"] == "completed")
+    total_assignments_all = sum(r.get("total_assignments", 0) for r in results if r["status"] == "completed")
+    total_users_all = sum(r.get("users_with_roles", 0) for r in results if r["status"] == "completed")
+    total_admin_roles_all = sum(r.get("admin_roles", 0) for r in results if r["status"] == "completed")
+
+    logging.info(
+        f" Total across all tenants: {total_roles_all} roles, {total_assignments_all} assignments, {total_users_all} users, {total_admin_roles_all} admin roles"
+    )
+
+
 @app.route(route="tenant/roles", methods=["GET"])
-def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP GET endpoint for single tenant roles data"""
-    # Returns structured response with role options and optimization actions
+def get_tenant_roles_by_id(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single tenant roles analysis"""
+    # Returns structured response with role optimization actions
 
     try:
         # extract & validate tenant id
         tenant_id = req.params.get("tenant_id")
-        logging.info(f"Roles API request for tenant: {tenant_id}")
+        logging.info(f"Roles analysis API request for tenant: {tenant_id}")
 
         if not tenant_id:
             return func.HttpResponse(
@@ -1158,7 +1339,7 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
                 headers={"Content-Type": "application/json"},
             )
 
-        # single Graph API call - much faster (same pattern as get_tenant_users)
+        # single Graph API call - much faster (same pattern as get_tenant_subscriptions)
         graph_client = GraphBetaClient(tenant_id)
         tenant_details = graph_client.get_tenant_details(tenant_id)
 
@@ -1168,11 +1349,11 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
         else:
             tenant_name = tenant_id
 
-        logging.info(f"Processing roles data for tenant: {tenant_name}")
+        logging.info(f"Processing roles analysis for tenant: {tenant_name}")
 
-        # grab roles data
-        # total unique roles
-        total_roles_query = "SELECT COUNT(DISTINCT role_id) as count FROM roles WHERE tenant_id = ?"
+        # grab roles data - simplified queries like get_tenant_subscriptions
+        # basic role counts
+        total_roles_query = "SELECT COUNT(*) as count FROM roles WHERE tenant_id = ?"
         total_roles_result = query(total_roles_query, (tenant_id,))
 
         # total role assignments
@@ -1184,122 +1365,37 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
         users_with_roles_result = query(users_with_roles_query, (tenant_id,))
 
         # Admin roles (roles containing 'Admin' or 'Administrator')
-        admin_roles_query = "SELECT COUNT(DISTINCT role_id) as count FROM roles WHERE tenant_id = ? AND (role_display_name LIKE '%Admin%' OR role_display_name LIKE '%Administrator%')"
+        admin_roles_query = "SELECT COUNT(*) as count FROM roles WHERE tenant_id = ? AND (role_display_name LIKE '%Admin%' OR role_display_name LIKE '%Administrator%')"
         admin_roles_result = query(admin_roles_query, (tenant_id,))
 
         # Users with multiple roles (potential over-privileged)
         multi_role_users_query = "SELECT COUNT(*) as count FROM (SELECT user_id FROM user_rolesV2 WHERE tenant_id = ? GROUP BY user_id HAVING COUNT(role_id) > 1)"
         multi_role_users_result = query(multi_role_users_query, (tenant_id,))
 
-        # fetch fresh role data from Microsoft Graph API for frontend dropdown
-        try:
-            # Get fresh role data from Graph API - use directoryRoles instead of directoryRoleTemplates
-            # directoryRoles shows only ACTIVE roles in the tenant, not all possible templates
-            logging.info(f"Fetching ACTIVE roles from Graph API for tenant {tenant_id}")
-            fresh_roles = graph_client.get("/directoryRoles")
-
-            # Debug logging to see what we got
-            logging.info(f"Graph API response type: {type(fresh_roles)}")
-            logging.info(f"Graph API response: {fresh_roles}")
-
-            # Check if we got valid data (should be a list)
-            if not isinstance(fresh_roles, list):
-                logging.warning(f"Graph API returned unexpected data type: {type(fresh_roles)}. Data: {fresh_roles}")
-                raise Exception(f"Invalid response format from Graph API: {type(fresh_roles)}")
-
-            # Transform Graph API data to match expected format
-            role_options = []
-            seen_role_ids = set()  # Track seen role IDs to prevent duplicates
-
-            for role_info in fresh_roles:
-                if isinstance(role_info, dict):
-                    try:
-                        # Extract the key fields safely
-                        role_id = role_info.get("id", "")
-                        display_name = role_info.get("displayName", "")
-                        description = role_info.get("description", "")
-
-                        # Skip if we've already seen this role ID
-                        if role_id in seen_role_ids:
-                            logging.info(f"Skipping duplicate role ID: {role_id}")
-                            continue
-
-                        # Use displayName if available, fallback to id
-                        final_display_name = display_name if display_name else role_id
-
-                        role_options.append(
-                            {
-                                "role_id": role_id,
-                                "role_display_name": final_display_name,
-                                "role_description": description,
-                                "member_count": 0,  # Graph API doesn't provide member count for active roles
-                            }
-                        )
-
-                        seen_role_ids.add(role_id)  # Mark this role ID as seen
-                        logging.info(f"Processed role: {final_display_name} (ID: {role_id})")
-
-                    except Exception as role_error:
-                        logging.warning(f"Error processing role info {role_info}: {str(role_error)}")
-                        continue
-                else:
-                    logging.warning(f"Skipping non-dict role info: {type(role_info)} - {role_info}")
-
-            logging.info(f"Fetched {len(role_options)} UNIQUE active roles from Graph API for tenant {tenant_id}")
-
-            # If we got no roles from Graph API, try directoryRoleTemplates as fallback
-            if len(role_options) == 0:
-                logging.info("No active roles found, trying directoryRoleTemplates...")
-                template_roles = graph_client.get("/directoryRoleTemplates")
-                if isinstance(template_roles, list):
-                    for role_info in template_roles:
-                        if isinstance(role_info, dict):
-                            role_id = role_info.get("id", "")
-                            display_name = role_info.get("displayName", "")
-                            if role_id and role_id not in seen_role_ids:
-                                role_options.append(
-                                    {
-                                        "role_id": role_id,
-                                        "role_display_name": display_name or role_id,
-                                        "role_description": role_info.get("description", ""),
-                                        "member_count": 0,
-                                    }
-                                )
-                                seen_role_ids.add(role_id)
-                                logging.info(f"Added template role: {display_name or role_id}")
-
-            # Final deduplication and validation
-            final_role_options = []
-            final_seen_ids = set()
-
-            for role in role_options:
-                if role["role_id"] not in final_seen_ids:
-                    final_role_options.append(role)
-                    final_seen_ids.add(role["role_id"])
-                else:
-                    logging.warning(f"Duplicate role found and removed: {role['role_display_name']} (ID: {role['role_id']})")
-
-            role_options = final_role_options
-            logging.info(f"Final result: {len(role_options)} unique roles after deduplication")
-
-            # Log all final roles for debugging
-            for role in role_options:
-                logging.info(f"Final role: {role['role_display_name']} (ID: {role['role_id']})")
-
-        except Exception as e:
-            logging.warning(f"Failed to fetch fresh roles from Graph API: {str(e)}. Falling back to database.")
-            # Fallback to database if Graph API fails
-            role_options_query = """
-            SELECT DISTINCT 
+        # fetch actual role data for the data field (same pattern as subscriptions)
+        roles_query = """
+            SELECT 
                 role_id,
                 role_display_name,
                 role_description,
                 member_count
             FROM roles 
-            WHERE tenant_id = ?
+            WHERE tenant_id = ? 
             ORDER BY role_display_name
-            """
-            role_options = query(role_options_query, (tenant_id,))
+        """
+        roles_result = query(roles_query, (tenant_id,))
+
+        # transform role data for frontend consumption (same pattern as subscriptions)
+        roles_data = []
+        for role in roles_result:
+            roles_data.append(
+                {
+                    "role_id": role["role_id"],
+                    "role_display_name": role["role_display_name"],
+                    "role_description": role["role_description"],
+                    "member_count": role["member_count"],
+                }
+            )
 
         # calculate metrics
         total_roles = total_roles_result[0]["count"] if total_roles_result else 0
@@ -1346,7 +1442,7 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
         # build response structure
         response_data = {
             "success": True,
-            "data": role_options,  # now contains actual role options for frontend
+            "data": roles_data,  # contains actual role records for frontend
             "metadata": {
                 "tenant_id": tenant_id,
                 "tenant_name": tenant_name,
@@ -1358,23 +1454,113 @@ def get_tenant_roles(req: func.HttpRequest) -> func.HttpResponse:
                 "multi_role_users": multi_role_users,
                 "avg_roles_per_user": avg_roles_per_user,
             },
-            "actions": actions[:3],  # limit to maximum 3 actions (roles tend to have fewer optimization opportunities)
+            "actions": actions[:3],  # limit to maximum 3 actions
         }
 
         return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
 
     except Exception as e:
-        error_msg = f"Error retrieving roles data: {str(e)}"
+        error_msg = f"Error retrieving roles analysis: {str(e)}"
         logging.error(error_msg)
         return func.HttpResponse(
             json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
         )
 
 
+@app.schedule(schedule="0 15 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+def get_tenant_groups(timer: func.TimerRequest) -> None:
+    """V2 Timer trigger for groups analysis across all tenants"""
+    if timer.past_due:
+        logging.warning("Groups analysis timer is past due!")
+
+    logging.info("Starting scheduled groups analysis across all tenants")
+    tenants = get_tenants()
+    results = []
+
+    for tenant in tenants:
+        try:
+            tenant_id = tenant["tenant_id"]
+            tenant_name = tenant["display_name"]
+
+            logging.info(f"Analyzing groups for tenant: {tenant_name}")
+
+            # Query group data for this tenant
+            total_groups_query = "SELECT COUNT(*) as count FROM groups WHERE tenant_id = ?"
+            total_groups_result = query(total_groups_query, (tenant_id,))
+
+            total_members_query = "SELECT COUNT(*) as count FROM user_groupsV2 WHERE tenant_id = ?"
+            total_members_result = query(total_members_query, (tenant_id,))
+
+            active_members_query = "SELECT COUNT(*) as count FROM user_groupsV2 WHERE tenant_id = ? AND is_active = 1"
+            active_members_result = query(active_members_query, (tenant_id,))
+
+            security_groups_query = "SELECT COUNT(*) as count FROM groups WHERE tenant_id = ? AND security_enabled = 1"
+            security_groups_result = query(security_groups_query, (tenant_id,))
+
+            mail_enabled_groups_query = "SELECT COUNT(*) as count FROM groups WHERE tenant_id = ? AND mail_enabled = 1"
+            mail_enabled_groups_result = query(mail_enabled_groups_query, (tenant_id,))
+
+            # Calculate metrics
+            total_groups = total_groups_result[0]["count"] if total_groups_result else 0
+            total_members = total_members_result[0]["count"] if total_members_result else 0
+            active_members = active_members_result[0]["count"] if active_members_result else 0
+            security_groups = security_groups_result[0]["count"] if security_groups_result else 0
+            mail_enabled_groups = mail_enabled_groups_result[0]["count"] if mail_enabled_groups_result else 0
+
+            # Generate optimization actions
+            actions = []
+            if total_members > 0 and active_members < total_members:
+                inactive_count = total_members - active_members
+                actions.append(f"Review {inactive_count} inactive group memberships")
+
+            if security_groups > 0:
+                actions.append(f"Monitor {security_groups} security groups")
+
+            if mail_enabled_groups > 0:
+                actions.append(f"Review {mail_enabled_groups} mail-enabled groups")
+
+            result = {
+                "status": "completed",
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "total_groups": total_groups,
+                "total_members": total_members,
+                "active_members": active_members,
+                "security_groups": security_groups,
+                "mail_enabled_groups": mail_enabled_groups,
+                "actions": actions,
+            }
+
+            logging.info(f"✓ {tenant_name}: {total_groups} groups, {active_members}/{total_members} active members")
+            results.append(result)
+
+        except Exception as e:
+            logging.error(f"✗ {tenant['display_name']}: {str(e)}")
+            results.append({"status": "error", "tenant_id": tenant["tenant_id"], "tenant_name": tenant["display_name"], "error": str(e)})
+
+    # Log summary
+    successful_count = len([r for r in results if r["status"] == "completed"])
+    failed_count = len([r for r in results if r["status"] == "error"])
+
+    if failed_count > 0:
+        logging.warning(f"Groups analysis completed with {failed_count} errors out of {len(tenants)} tenants")
+    else:
+        logging.info(f"✓ Groups analysis completed successfully for {len(tenants)} tenants")
+
+    # Log total metrics across all tenants
+    total_groups_all = sum(r.get("total_groups", 0) for r in results if r["status"] == "completed")
+    total_members_all = sum(r.get("total_members", 0) for r in results if r["status"] == "completed")
+    total_security_groups_all = sum(r.get("security_groups", 0) for r in results if r["status"] == "completed")
+
+    logging.info(
+        f" Total across all tenants: {total_groups_all} groups, {total_members_all} members, {total_security_groups_all} security groups"
+    )
+
+
 @app.route(route="tenant/groups", methods=["GET"])
-def get_tenant_groups(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP GET endpoint for single tenant groups data"""
-    # Returns structured response with group options for frontend
+def get_tenant_groups_by_id(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP GET endpoint for single tenant groups analysis"""
+    # Returns structured response with group optimization actions
 
     try:
         # extract & validate tenant id
@@ -1435,7 +1621,7 @@ def get_tenant_groups(req: func.HttpRequest) -> func.HttpResponse:
                 "tenant_name": tenant_name,
                 "timestamp": datetime.now().isoformat(),
                 "total_groups": len(group_options),
-                "endpoint": "get_tenant_groups",
+                "endpoint": "get_tenant_groups_by_id",
             },
         }
 
@@ -1452,8 +1638,95 @@ def get_tenant_groups(req: func.HttpRequest) -> func.HttpResponse:
 # create azure function with timer trigger for get tenant subscriptions for multi tenant functionality
 @app.schedule(schedule="0 30 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
 def get_tenant_subscriptions(timer: func.TimerRequest) -> None:
-    # use subscription_syncV2 to get all tenant subscriptions
-    pass
+    """V2 Timer trigger for subscriptions analysis across all tenants"""
+    if timer.past_due:
+        logging.warning("Subscriptions analysis timer is past due!")
+
+    logging.info("Starting scheduled subscriptions analysis across all tenants")
+    tenants = get_tenants()
+    results = []
+
+    for tenant in tenants:
+        try:
+            tenant_id = tenant["tenant_id"]
+            tenant_name = tenant["display_name"]
+
+            logging.info(f"Analyzing subscriptions for tenant: {tenant_name}")
+
+            # Query subscription data for this tenant
+            total_subscriptions_query = "SELECT COUNT(*) as count FROM subscriptions WHERE tenant_id = ?"
+            total_subscriptions_result = query(total_subscriptions_query, (tenant_id,))
+
+            active_subscriptions_query = "SELECT COUNT(*) as count FROM subscriptions WHERE tenant_id = ? AND is_active = 1"
+            active_subscriptions_result = query(active_subscriptions_query, (tenant_id,))
+
+            trial_subscriptions_query = "SELECT COUNT(*) as count FROM subscriptions WHERE tenant_id = ? AND is_trial = 1"
+            trial_subscriptions_result = query(trial_subscriptions_query, (tenant_id,))
+
+            expiring_soon_query = """
+            SELECT COUNT(*) as count FROM subscriptions 
+            WHERE tenant_id = ? AND next_lifecycle_date_time IS NOT NULL 
+            AND date(next_lifecycle_date_time) <= date('now', '+30 days')
+            """
+            expiring_soon_result = query(expiring_soon_query, (tenant_id,))
+
+            # Calculate metrics
+            total_subscriptions = total_subscriptions_result[0]["count"] if total_subscriptions_result else 0
+            active_subscriptions = active_subscriptions_result[0]["count"] if active_subscriptions_result else 0
+            trial_subscriptions = trial_subscriptions_result[0]["count"] if trial_subscriptions_result else 0
+            expiring_soon = expiring_soon_result[0]["count"] if expiring_soon_result else 0
+            inactive_subscriptions = total_subscriptions - active_subscriptions
+
+            # Generate optimization actions
+            actions = []
+            if inactive_subscriptions > 0:
+                actions.append(f"Review {inactive_subscriptions} inactive subscriptions")
+
+            if trial_subscriptions > 0:
+                actions.append(f"Monitor {trial_subscriptions} trial subscriptions")
+
+            if expiring_soon > 0:
+                actions.append(f"Renew {expiring_soon} subscriptions expiring soon")
+
+            result = {
+                "status": "completed",
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "total_subscriptions": total_subscriptions,
+                "active_subscriptions": active_subscriptions,
+                "inactive_subscriptions": inactive_subscriptions,
+                "trial_subscriptions": trial_subscriptions,
+                "expiring_soon": expiring_soon,
+                "actions": actions,
+            }
+
+            logging.info(
+                f"✓ {tenant_name}: {active_subscriptions}/{total_subscriptions} active subscriptions, {trial_subscriptions} trials"
+            )
+            results.append(result)
+
+        except Exception as e:
+            logging.error(f"✗ {tenant['display_name']}: {str(e)}")
+            results.append({"status": "error", "tenant_id": tenant["tenant_id"], "tenant_name": tenant["display_name"], "error": str(e)})
+
+    # Log summary
+    successful_count = len([r for r in results if r["status"] == "completed"])
+    failed_count = len([r for r in results if r["status"] == "error"])
+
+    if failed_count > 0:
+        logging.warning(f"Subscriptions analysis completed with {failed_count} errors out of {len(tenants)} tenants")
+    else:
+        logging.info(f"✓ Subscriptions analysis completed successfully for {len(tenants)} tenants")
+
+    # Log total metrics across all tenants
+    total_subscriptions_all = sum(r.get("total_subscriptions", 0) for r in results if r["status"] == "completed")
+    active_subscriptions_all = sum(r.get("active_subscriptions", 0) for r in results if r["status"] == "completed")
+    trial_subscriptions_all = sum(r.get("trial_subscriptions", 0) for r in results if r["status"] == "completed")
+    expiring_soon_all = sum(r.get("expiring_soon", 0) for r in results if r["status"] == "completed")
+
+    logging.info(
+        f" Total across all tenants: {total_subscriptions_all} subscriptions, {active_subscriptions_all} active, {trial_subscriptions_all} trials, {expiring_soon_all} expiring soon"
+    )
 
 
 @app.route(route="tenant/subscriptions", methods=["GET"])
@@ -1616,136 +1889,6 @@ def get_tenant_subscription_by_id(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         error_msg = f"Error retrieving subscription data: {str(e)}"
-        logging.error(error_msg)
-        return func.HttpResponse(
-            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
-        )
-
-
-@app.route(route="tenant/groups/{group_id}/members", methods=["GET"])
-def get_group_members_http(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP GET endpoint to get members of a specific group"""
-    try:
-        # extract group_id from URL path
-        group_id = req.route_params.get("group_id")
-
-        # extract & validate tenant id
-        tenant_id = req.params.get("tenant_id")
-        logging.info(f"Group members API request for group: {group_id} in tenant: {tenant_id}")
-
-        if not group_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "group_id is required in URL path"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
-
-        if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
-
-        # check if tenant exists
-        tenants = get_tenants()
-        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
-
-        if tenant_id not in tenant_names:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
-
-        tenant_name = tenant_names[tenant_id]
-
-        # fetch group members
-        from sync.group_syncV2 import get_group_members
-
-        members = get_group_members(tenant_id, group_id)
-
-        # build response structure
-        response_data = {
-            "success": True,
-            "data": {"group_id": group_id, "members": members, "total_members": len(members)},
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "timestamp": datetime.now().isoformat(),
-                "endpoint": "get_group_members",
-            },
-        }
-
-        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
-
-    except Exception as e:
-        error_msg = f"Error retrieving group members: {str(e)}"
-        logging.error(error_msg)
-        return func.HttpResponse(
-            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
-        )
-
-
-@app.route(route="tenant/users/{user_id}/groups", methods=["GET"])
-def get_user_groups_http(req: func.HttpRequest) -> func.HttpResponse:
-    """HTTP GET endpoint to get all groups for a specific user"""
-    try:
-        # extract user_id from URL path
-        user_id = req.route_params.get("user_id")
-
-        # extract & validate tenant id
-        tenant_id = req.params.get("tenant_id")
-        logging.info(f"User groups API request for user: {user_id} in tenant: {tenant_id}")
-
-        if not user_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "user_id is required in URL path"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
-
-        if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
-
-        # check if tenant exists
-        tenants = get_tenants()
-        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
-
-        if tenant_id not in tenant_names:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
-
-        tenant_name = tenant_names[tenant_id]
-
-        # fetch user groups
-        from sync.group_syncV2 import get_user_groups
-
-        groups = get_user_groups(tenant_id, user_id)
-
-        # build response structure
-        response_data = {
-            "success": True,
-            "data": {"user_id": user_id, "groups": groups, "total_groups": len(groups)},
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "timestamp": datetime.now().isoformat(),
-                "endpoint": "get_user_groups",
-            },
-        }
-
-        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
-
-    except Exception as e:
-        error_msg = f"Error retrieving user groups: {str(e)}"
         logging.error(error_msg)
         return func.HttpResponse(
             json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
@@ -2492,7 +2635,7 @@ def generate_user_report(timer: func.TimerRequest) -> None:
                 logging.info(json.dumps(tenant_summary, indent=2))
 
             except Exception as e:
-                logging.error(f"Error processing {tenant['name']}: {e}")
+                logging.error(f"Error processing {tenant['display_name']}: {e}")
 
         # Build comprehensive report
         comprehensive_report = {

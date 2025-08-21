@@ -44,10 +44,10 @@ def fetch_tenant_groups(tenant_id):
 def fetch_group_members(tenant_id, group_id):
     """Fetch detailed member information for a specific group"""
     try:
-        logger.info(f"Fetching members for group {group_id}")
+        # logger.info(f"Fetching members for group {group_id}")
         graph = GraphBetaClient(tenant_id)
         members = graph.get(f"/groups/{group_id}/members", select=["id", "userPrincipalName", "displayName"])
-        logger.info(f"Group {group_id}: Found {len(members) if members else 0} members")
+        #logger.info(f"Group {group_id}: Found {len(members) if members else 0} members")
         return members
     except Exception as e:
         logger.warning(f"Failed to fetch members for group {group_id}: {str(e)}")
@@ -57,10 +57,10 @@ def fetch_group_members(tenant_id, group_id):
 def fetch_group_owners(tenant_id, group_id):
     """Fetch detailed owner information for a specific group"""
     try:
-        logger.info(f"Fetching owners for group {group_id}")
+        # logger.info(f"Fetching owners for group {group_id}")
         graph = GraphBetaClient(tenant_id)
         owners = graph.get(f"/groups/{group_id}/owners", select=["id", "userPrincipalName", "displayName"])
-        logger.info(f"Group {group_id}: Found {len(owners) if owners else 0} owners")
+        # logger.info(f"Group {group_id}: Found {len(owners) if owners else 0} owners")
         return owners
     except Exception as e:
         logger.warning(f"Failed to fetch owners for group {group_id}: {str(e)}")

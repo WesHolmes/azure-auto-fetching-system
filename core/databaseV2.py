@@ -77,14 +77,10 @@ def init_schema():
                 commerce_subscription_id TEXT(255),
                 sku_id TEXT(255) NOT NULL,
                 sku_part_number TEXT(100),
-                status TEXT(50) DEFAULT 'Enabled',
+                is_active INTEGER NOT NULL DEFAULT 1,
                 is_trial INTEGER NOT NULL DEFAULT 0,
                 total_licenses INTEGER NOT NULL DEFAULT 0,
-                created_date_time TEXT, -- ISO datetime format
                 next_lifecycle_date_time TEXT, -- ISO datetime format
-                owner_id TEXT(255),
-                owner_tenant_id TEXT(255),
-                owner_type TEXT(50),
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 last_updated TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (tenant_id, subscription_id)
@@ -94,7 +90,6 @@ def init_schema():
         # Indexes for subscriptions table
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant ON subscriptions(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_sku ON subscriptions(sku_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_owner ON subscriptions(owner_id)")
 
         # User licenses table V2
         cursor.execute(

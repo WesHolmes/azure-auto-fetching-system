@@ -1449,8 +1449,15 @@ def get_tenant_groups(req: func.HttpRequest) -> func.HttpResponse:
         )
 
 
+# create azure function with timer trigger for get tenant subscriptions for multi tenant functionality
+@app.schedule(schedule="0 30 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+def get_tenant_subscriptions(timer: func.TimerRequest) -> None:
+    # use subscription_syncV2 to get all tenant subscriptions
+    pass
+
+
 @app.route(route="tenant/subscriptions", methods=["GET"])
-def get_tenant_subscriptions(req: func.HttpRequest) -> func.HttpResponse:
+def get_tenant_subscription_by_id(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP GET endpoint for single tenant subscription data"""
     # Returns structured response with subscription optimization actions
 
@@ -1483,7 +1490,7 @@ def get_tenant_subscriptions(req: func.HttpRequest) -> func.HttpResponse:
         total_subscriptions_query = "SELECT COUNT(*) as count FROM subscriptions WHERE tenant_id = ?"
         total_subscriptions_result = query(total_subscriptions_query, (tenant_id,))
 
-        active_subscriptions_query = "SELECT COUNT(*) as count FROM subscriptions WHERE tenant_id = ? AND status = 'Enabled'"
+        active_subscriptions_query = "SELECT COUNT(*) as count FROM subscriptions WHERE tenant_id = ? AND is_active = 1"
         active_subscriptions_result = query(active_subscriptions_query, (tenant_id,))
 
         # trial subscriptions count
@@ -1512,14 +1519,10 @@ def get_tenant_subscriptions(req: func.HttpRequest) -> func.HttpResponse:
                 commerce_subscription_id,
                 sku_id,
                 sku_part_number,
-                status,
+                is_active,
                 is_trial,
                 total_licenses,
-                created_date_time,
                 next_lifecycle_date_time,
-                owner_id,
-                owner_tenant_id,
-                owner_type,
                 created_at,
                 last_updated
             FROM subscriptions 
@@ -1537,14 +1540,10 @@ def get_tenant_subscriptions(req: func.HttpRequest) -> func.HttpResponse:
                     "commerce_subscription_id": subscription["commerce_subscription_id"],
                     "sku_id": subscription["sku_id"],
                     "sku_part_number": subscription["sku_part_number"],
-                    "status": subscription["status"],
+                    "is_active": bool(subscription["is_active"]),
                     "is_trial": bool(subscription["is_trial"]),
                     "total_licenses": subscription["total_licenses"],
-                    "created_date_time": subscription["created_date_time"],
                     "next_lifecycle_date_time": subscription["next_lifecycle_date_time"],
-                    "owner_id": subscription["owner_id"],
-                    "owner_tenant_id": subscription["owner_tenant_id"],
-                    "owner_type": subscription["owner_type"],
                     "created_at": subscription["created_at"],
                     "last_updated": subscription["last_updated"],
                 }

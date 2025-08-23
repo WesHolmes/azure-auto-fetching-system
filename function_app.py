@@ -1127,13 +1127,13 @@ def get_tenant_licenses_by_id(req: func.HttpRequest) -> func.HttpResponse:
         # fetch actual license data for the data field (same pattern as subscriptions)
         licenses_query = """
             SELECT 
-                license_display_name,
-                license_partnumber,
-                monthly_cost,
-                status
-            FROM licenses 
-            WHERE tenant_id = ? 
-            ORDER BY license_display_name
+            license_display_name,
+            license_partnumber,
+            monthly_cost,
+            status
+        FROM licenses 
+        WHERE tenant_id = ?
+        ORDER BY license_display_name
         """
         licenses_result = query(licenses_query, (tenant_id,))
 
@@ -1380,9 +1380,9 @@ def get_tenant_roles_by_id(req: func.HttpRequest) -> func.HttpResponse:
                 role_description,
                 member_count
             FROM roles 
-            WHERE tenant_id = ? 
+            WHERE tenant_id = ?
             ORDER BY role_display_name
-        """
+            """
         roles_result = query(roles_query, (tenant_id,))
 
         # transform role data for frontend consumption (same pattern as subscriptions)

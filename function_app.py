@@ -18,6 +18,7 @@ from sync.license_syncV2 import sync_licenses as sync_licenses_v2
 from sync.role_syncV2 import sync_rolesV2
 from sync.subscription_syncV2 import sync_subscriptions
 from sync.user_syncV2 import sync_users as sync_users_v2
+from utils.http import create_bulk_operation_response, create_error_response, create_success_response
 
 
 # from sync.hibp_sync import sync_hibp_breaches
@@ -278,15 +279,18 @@ def user_sync_v2_http(req: func.HttpRequest) -> func.HttpResponse:
         if failed_count > 0:
             categorize_sync_errors(results, "User V2 HTTP")
 
-        return func.HttpResponse(
-            f"Synced {total_users} users and {total_licenses} license assignments across {len(tenants)} tenants",
-            status_code=200,
+        return create_success_response(
+            data={"total_users": total_users, "total_licenses": total_licenses, "tenants_processed": len(tenants)},
+            tenant_id="multi_tenant",
+            tenant_name="all_tenants",
+            operation="user_sync_v2_http",
+            message=f"Synced {total_users} users and {total_licenses} license assignments across {len(tenants)} tenants",
         )
 
     except Exception as e:
         error_msg = f"User sync V2 failed: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(error_msg, status_code=500)
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 @app.route(route="sync/licenses", methods=["POST"])
@@ -336,15 +340,18 @@ def license_sync_http(req: func.HttpRequest) -> func.HttpResponse:
         if failed_count > 0:
             categorize_sync_errors(results, "License HTTP")
 
-        return func.HttpResponse(
-            f"Synced {total_licenses} licenses and {total_assignments} user assignments across {len(tenants)} tenants",
-            status_code=200,
+        return create_success_response(
+            data={"total_licenses": total_licenses, "total_assignments": total_assignments, "tenants_processed": len(tenants)},
+            tenant_id="multi_tenant",
+            tenant_name="all_tenants",
+            operation="license_sync_http",
+            message=f"Synced {total_licenses} licenses and {total_assignments} user assignments across {len(tenants)} tenants",
         )
 
     except Exception as e:
         error_msg = f"License sync failed: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(error_msg, status_code=500)
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 @app.route(route="sync/roles", methods=["POST"])
@@ -371,16 +378,27 @@ def role_sync_http(req: func.HttpRequest) -> func.HttpResponse:
             if failed_tenants > 0:
                 response_msg += f" ({failed_tenants} tenants failed)"
 
-            return func.HttpResponse(response_msg, status_code=200)
+            return create_success_response(
+                data={
+                    "total_roles": total_roles,
+                    "total_role_assignments": total_role_assignments,
+                    "successful_tenants": successful_tenants,
+                    "failed_tenants": failed_tenants,
+                },
+                tenant_id="multi_tenant",
+                tenant_name="all_tenants",
+                operation="role_sync_http",
+                message=response_msg,
+            )
         else:
             error_msg = f"Role sync failed: {result.get('error', 'Unknown error')}"
             logging.error(error_msg)
-            return func.HttpResponse(error_msg, status_code=500)
+            return create_error_response(error_message=error_msg, status_code=500)
 
     except Exception as e:
         error_msg = f"Role sync failed: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(error_msg, status_code=500)
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 @app.route(route="sync/groups", methods=["POST"])
@@ -429,15 +447,18 @@ def groups_sync_http(req: func.HttpRequest) -> func.HttpResponse:
         total_groups = sum(r.get("groups_synced", 0) for r in results if r["status"] == "completed")
         total_user_groups = sum(r.get("user_groups_synced", 0) for r in results if r["status"] == "completed")
 
-        return func.HttpResponse(
-            f"Synced {total_groups} groups and {total_user_groups} user-group assignments across {len(tenants)} tenants",
-            status_code=200,
+        return create_success_response(
+            data={"total_groups": total_groups, "total_user_groups": total_user_groups, "tenants_processed": len(tenants)},
+            tenant_id="multi_tenant",
+            tenant_name="all_tenants",
+            operation="groups_sync_http",
+            message=f"Synced {total_groups} groups and {total_user_groups} user-group assignments across {len(tenants)} tenants",
         )
 
     except Exception as e:
         error_msg = f"Group sync failed: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(error_msg, status_code=500)
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 @app.route(route="sync/subscriptions", methods=["POST"])
@@ -480,15 +501,18 @@ def subscriptions_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 
         total_subscriptions = sum(r.get("subscriptions_synced", 0) for r in results if r["status"] == "completed")
 
-        return func.HttpResponse(
-            f"Synced {total_subscriptions} subscriptions across {len(tenants)} tenants",
-            status_code=200,
+        return create_success_response(
+            data={"total_subscriptions": total_subscriptions, "tenants_processed": len(tenants)},
+            tenant_id="multi_tenant",
+            tenant_name="all_tenants",
+            operation="subscriptions_sync_http",
+            message=f"Synced {total_subscriptions} subscriptions across {len(tenants)} tenants",
         )
 
     except Exception as e:
         error_msg = f"Subscription sync failed: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(error_msg, status_code=500)
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 @app.route(route="tenant/users/{user_id}", methods=["GET"])
@@ -505,18 +529,10 @@ def get_tenant_user_by_id(req: func.HttpRequest) -> func.HttpResponse:
         logging.info(f"User by ID API request for user: {user_id} in tenant: {tenant_id}")
 
         if not user_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "user_id is required in URL path"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="user_id is required in URL path", status_code=400)
 
         if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="tenant_id parameter is required", status_code=400)
 
         # Single Graph API call - much faster
         graph_client = GraphBetaClient(tenant_id)
@@ -587,26 +603,15 @@ def get_tenant_user_by_id(req: func.HttpRequest) -> func.HttpResponse:
             "last_updated": user["last_updated"],
         }
 
-        # build response structure
-        response_data = {
-            "success": True,
-            "data": user_data,
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "user_id": user_id,
-                "timestamp": datetime.now().isoformat(),
-            },
-        }
-
-        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+        # build response structure using utility function
+        return create_success_response(
+            data=user_data, tenant_id=tenant_id, tenant_name=tenant_name, operation="get_tenant_user_by_id", resource_id=user_id
+        )
 
     except Exception as e:
         error_msg = f"Error retrieving user data: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(
-            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
-        )
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 @app.route(route="tenant/users", methods=["GET"])
@@ -620,11 +625,7 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
         logging.info(f"Users API request for tenant: {tenant_id}")
 
         if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="tenant_id parameter is required", status_code=400)
 
         # single Graph API call - much faster
         graph_client = GraphBetaClient(tenant_id)
@@ -765,14 +766,13 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
                 }
             )
 
-        # build response structure
-        response_data = {
-            "success": True,
-            "data": users_data,  # now populated with actual user records
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "timestamp": datetime.now().isoformat(),
+        # build response structure using utility function
+        return create_success_response(
+            data=users_data,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="get_tenant_users",
+            metrics={
                 "total_users": total_users,
                 "active_users": active_users,
                 "inactive_users": inactive_users,
@@ -782,10 +782,8 @@ def get_tenant_users(req: func.HttpRequest) -> func.HttpResponse:
                 "mfa_enabled_users": mfa_result.get("mfa_enabled", 0),
                 "risk_level": mfa_result.get("risk_level", "unknown"),
             },
-            "actions": actions[:4],  # limit to maximum 4 actions
-        }
-
-        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+            actions=actions,
+        )
 
     except Exception as e:
         error_msg = f"Error retrieving user data: {str(e)}"
@@ -804,11 +802,7 @@ def edit_user(req: func.HttpRequest) -> func.HttpResponse:
         try:
             request_data = req.get_json()
         except Exception as e:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Invalid JSON in request body: {str(e)}"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"Invalid JSON in request body: {str(e)}", status_code=400)
 
         # Extract and validate required fields
         tenant_id = request_data.get("tenant_id")
@@ -816,25 +810,13 @@ def edit_user(req: func.HttpRequest) -> func.HttpResponse:
         user_updates = request_data.get("user_updates", {})
 
         if not user_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "user_id is required in request body"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="user_id is required in request body", status_code=400)
 
         if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="tenant_id is required", status_code=400)
 
         if not user_updates:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "user_updates object is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="user_updates object is required", status_code=400)
 
         # Add detailed logging for debugging
         logging.info("=== USER EDIT DEBUG LOG ===")
@@ -848,11 +830,7 @@ def edit_user(req: func.HttpRequest) -> func.HttpResponse:
         existing_user_result = query(existing_user_query, (user_id, tenant_id))
 
         if not existing_user_result:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"User {user_id} not found in tenant {tenant_id}"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"User {user_id} not found in tenant {tenant_id}", status_code=404)
 
         existing_user = existing_user_result[0]
         logging.info(f"Found existing user: {existing_user['display_name']}")
@@ -875,11 +853,7 @@ def edit_user(req: func.HttpRequest) -> func.HttpResponse:
                 logging.info(f"Will update {graph_field}: '{user_updates[frontend_field]}'")
 
         if not graph_update_data:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "No valid fields to update"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="No valid fields to update", status_code=400)
 
         # Update user via Graph API
         graph_client = GraphBetaClient(tenant_id)
@@ -890,20 +864,12 @@ def edit_user(req: func.HttpRequest) -> func.HttpResponse:
         except Exception as graph_error:
             error_msg = f"Graph API error: {str(graph_error)}"
             logging.error(f"Failed to update user via Graph API: {error_msg}")
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Failed to update user: {error_msg}"}),
-                status_code=500,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"Failed to update user: {error_msg}", status_code=500)
 
         if update_result.get("status") != "success":
             error_msg = update_result.get("error", "Unknown error updating user")
             logging.error(f"Failed to update user via Graph API: {error_msg}")
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Failed to update user: {error_msg}"}),
-                status_code=500,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"Failed to update user: {error_msg}", status_code=500)
 
         # Update local database
         update_fields = []
@@ -972,25 +938,19 @@ def edit_user(req: func.HttpRequest) -> func.HttpResponse:
         else:
             response_user_data = None
 
-        return func.HttpResponse(
-            json.dumps(
-                {
-                    "success": True,
-                    "message": f"User {existing_user['display_name']} updated successfully",
-                    "data": response_user_data,
-                    "updated_fields": list(graph_update_data.keys()),
-                }
-            ),
-            status_code=200,
-            headers={"Content-Type": "application/json"},
+        return create_success_response(
+            data=response_user_data,
+            tenant_id=tenant_id,
+            tenant_name=tenant_id,  # Use tenant_id as fallback since we don't have tenant_name
+            operation="edit_user",
+            message=f"User {existing_user['display_name']} updated successfully",
+            updated_fields=list(graph_update_data.keys()),
         )
 
     except Exception as e:
         error_msg = f"Error updating user: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(
-            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
-        )
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 @app.schedule(schedule="0 25 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
@@ -1086,11 +1046,7 @@ def get_tenant_licenses_by_id(req: func.HttpRequest) -> func.HttpResponse:
         logging.info(f"Licenses analysis API request for tenant: {tenant_id}")
 
         if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="tenant_id parameter is required", status_code=400)
 
         # single Graph API call - much faster (same pattern as get_tenant_subscriptions)
         graph_client = GraphBetaClient(tenant_id)
@@ -1201,14 +1157,13 @@ def get_tenant_licenses_by_id(req: func.HttpRequest) -> func.HttpResponse:
                 }
             )
 
-        # build response structure
-        response_data = {
-            "success": True,
-            "data": licenses_data,  # contains actual license records for frontend
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "timestamp": datetime.now().isoformat(),
+        # build response structure using utility function
+        return create_success_response(
+            data=licenses_data,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="get_tenant_licenses_by_id",
+            metrics={
                 "total_license_types": total_license_types,
                 "total_license_assignments": total_assignments,
                 "active_license_assignments": active_assignments,
@@ -1217,17 +1172,13 @@ def get_tenant_licenses_by_id(req: func.HttpRequest) -> func.HttpResponse:
                 "underutilized_licenses": license_optimization.get("underutilized_licenses", 0),
                 "estimated_monthly_savings": monthly_savings,
             },
-            "actions": actions[:4],  # limit to maximum 4 actions
-        }
-
-        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+            actions=actions,
+        )
 
     except Exception as e:
         error_msg = f"Error retrieving license analysis: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(
-            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
-        )
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 @app.schedule(schedule="0 20 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
@@ -1333,11 +1284,7 @@ def get_tenant_roles_by_id(req: func.HttpRequest) -> func.HttpResponse:
         logging.info(f"Roles analysis API request for tenant: {tenant_id}")
 
         if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="tenant_id parameter is required", status_code=400)
 
         # single Graph API call - much faster (same pattern as get_tenant_subscriptions)
         graph_client = GraphBetaClient(tenant_id)
@@ -1439,14 +1386,13 @@ def get_tenant_roles_by_id(req: func.HttpRequest) -> func.HttpResponse:
                 }
             )
 
-        # build response structure
-        response_data = {
-            "success": True,
-            "data": roles_data,  # contains actual role records for frontend
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "timestamp": datetime.now().isoformat(),
+        # build response structure using utility function
+        return create_success_response(
+            data=roles_data,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="get_tenant_roles_by_id",
+            metrics={
                 "total_roles": total_roles,
                 "total_role_assignments": total_assignments,
                 "users_with_roles": users_with_roles,
@@ -1454,17 +1400,13 @@ def get_tenant_roles_by_id(req: func.HttpRequest) -> func.HttpResponse:
                 "multi_role_users": multi_role_users,
                 "avg_roles_per_user": avg_roles_per_user,
             },
-            "actions": actions[:3],  # limit to maximum 3 actions
-        }
-
-        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+            actions=actions,
+        )
 
     except Exception as e:
         error_msg = f"Error retrieving roles analysis: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(
-            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
-        )
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 @app.schedule(schedule="0 15 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
@@ -1568,22 +1510,14 @@ def get_tenant_groups_by_id(req: func.HttpRequest) -> func.HttpResponse:
         logging.info(f"Groups API request for tenant: {tenant_id}")
 
         if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="tenant_id parameter is required", status_code=400)
 
         # check if tenant exists
         tenants = get_tenants()
-        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        tenant_names = {t["tenant_id"]: t["display_name"] for t in tenants}
 
         if tenant_id not in tenant_names:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"Tenant '{tenant_id}' not found", status_code=404)
 
         tenant_name = tenant_names[tenant_id]
         logging.info(f"Processing groups data for tenant: {tenant_name}")
@@ -1612,27 +1546,22 @@ def get_tenant_groups_by_id(req: func.HttpRequest) -> func.HttpResponse:
             logging.warning(f"Could not fetch groups from database: {str(e)}")
             group_options = []
 
-        # build response structure
-        response_data = {
-            "success": True,
-            "data": group_options,  # contains group options for frontend
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "timestamp": datetime.now().isoformat(),
+        # build response structure using utility function
+        return create_success_response(
+            data=group_options,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="get_tenant_groups_by_id",
+            metrics={
                 "total_groups": len(group_options),
                 "endpoint": "get_tenant_groups_by_id",
             },
-        }
-
-        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+        )
 
     except Exception as e:
         error_msg = f"Error retrieving groups data: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(
-            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
-        )
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 # create azure function with timer trigger for get tenant subscriptions for multi tenant functionality
@@ -1740,11 +1669,7 @@ def get_tenant_subscription_by_id(req: func.HttpRequest) -> func.HttpResponse:
         logging.info(f"Subscriptions API request for tenant: {tenant_id}")
 
         if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id parameter is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="tenant_id parameter is required", status_code=400)
 
         # single Graph API call - much faster
         graph_client = GraphBetaClient(tenant_id)
@@ -1867,14 +1792,13 @@ def get_tenant_subscription_by_id(req: func.HttpRequest) -> func.HttpResponse:
                 }
             )
 
-        # build response structure
-        response_data = {
-            "success": True,
-            "data": subscriptions_data,  # contains actual subscription records for frontend
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "timestamp": datetime.now().isoformat(),
+        # build response structure using utility function
+        return create_success_response(
+            data=subscriptions_data,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="get_tenant_subscription_by_id",
+            metrics={
                 "total_subscriptions": total_subscriptions,
                 "active_subscriptions": active_subscriptions,
                 "inactive_subscriptions": inactive_subscriptions,
@@ -1882,17 +1806,13 @@ def get_tenant_subscription_by_id(req: func.HttpRequest) -> func.HttpResponse:
                 "expiring_soon": expiring_soon,
                 "total_licenses": total_licenses,
             },
-            "actions": actions[:4],  # limit to maximum 4 actions
-        }
-
-        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+            actions=actions,
+        )
 
     except Exception as e:
         error_msg = f"Error retrieving subscription data: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(
-            json.dumps({"success": False, "error": error_msg}), status_code=500, headers={"Content-Type": "application/json"}
-        )
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 @app.route(route="users/{user_id}/disable", methods=["PATCH"])
@@ -1906,11 +1826,7 @@ def disable_user(req: func.HttpRequest) -> func.HttpResponse:
 
         req_body = req.get_json()
         if not req_body:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "Request body is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="Request body is required", status_code=400)
 
         # get tenant_id and user identifier from request
         tenant_id = req_body.get("tenant_id")
@@ -1919,29 +1835,17 @@ def disable_user(req: func.HttpRequest) -> func.HttpResponse:
 
         # validate required parameters
         if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="tenant_id is required", status_code=400)
 
         if not user_id and not user_principal_name:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "Either user_id or user_principal_name is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="Either user_id or user_principal_name is required", status_code=400)
 
         # check if tenant exists
         tenants = get_tenants()
-        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        tenant_names = {t["tenant_id"]: t["display_name"] for t in tenants}
 
         if tenant_id not in tenant_names:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"Tenant '{tenant_id}' not found", status_code=404)
 
         tenant_name = tenant_names[tenant_id]
         logging.info(f"Disabling user for tenant: {tenant_name}")
@@ -1959,27 +1863,17 @@ def disable_user(req: func.HttpRequest) -> func.HttpResponse:
             identifier = f"user_principal_name: {user_principal_name}"
 
         if not user_result:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"User not found ({identifier})"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"User not found ({identifier})", status_code=404)
 
         user = user_result[0]
         logging.info(f"Found user: {user['user_principal_name']}")
 
         # check if user is already disabled
         if not user.get("account_enabled", True):
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": f"User {user['user_principal_name']} is already disabled",
-                        "data": {"user_id": user["user_id"], "user_principal_name": user["user_principal_name"], "account_enabled": False},
-                    }
-                ),
+            return create_error_response(
+                error_message=f"User {user['user_principal_name']} is already disabled",
                 status_code=409,
-                headers={"Content-Type": "application/json"},
+                data={"user_id": user["user_id"], "user_principal_name": user["user_principal_name"], "account_enabled": False},
             )
 
         # disable user account via graph api
@@ -1992,20 +1886,14 @@ def disable_user(req: func.HttpRequest) -> func.HttpResponse:
         if disable_result.get("status") != "success":
             error_msg = disable_result.get("error", "Unknown error disabling user")
             logging.error(f"Failed to disable user via Graph API: {error_msg}")
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": f"Failed to disable user: {error_msg}",
-                        "data": {
-                            "user_id": user["user_id"],
-                            "user_principal_name": user["user_principal_name"],
-                            "graph_api_error": error_msg,
-                        },
-                    }
-                ),
+            return create_error_response(
+                error_message=f"Failed to disable user: {error_msg}",
                 status_code=500,
-                headers={"Content-Type": "application/json"},
+                data={
+                    "user_id": user["user_id"],
+                    "user_principal_name": user["user_principal_name"],
+                    "graph_api_error": error_msg,
+                },
             )
 
         # update local database to reflect disabled status
@@ -2019,11 +1907,9 @@ def disable_user(req: func.HttpRequest) -> func.HttpResponse:
             logging.warning(f"Graph API update succeeded but local DB update failed for user {user_id}: {str(db_error)}")
             # Note: user is updated in Graph but local DB might be out of sync
 
-        # return success response
-        response_data = {
-            "success": True,
-            "message": f"User {user['user_principal_name']} successfully disabled",
-            "data": {
+        # return success response using utility function
+        return create_success_response(
+            data={
                 "user_id": user["user_id"],
                 "user_principal_name": user["user_principal_name"],
                 "display_name": user.get("display_name"),
@@ -2032,30 +1918,25 @@ def disable_user(req: func.HttpRequest) -> func.HttpResponse:
                 "disabled_at": current_time,
                 "last_sign_in": user.get("last_sign_in_date"),
             },
-        }
-
-        logging.info(f"Successfully disabled user {user['user_principal_name']}")
-        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="disable_user",
+            message=f"User {user['user_principal_name']} successfully disabled",
+        )
 
     except Exception as e:
         # comprehensive error handling and logging
         error_msg = f"Error disabling user: {str(e)}"
         logging.error(error_msg)
 
-        return func.HttpResponse(
-            json.dumps(
-                {
-                    "success": False,
-                    "error": error_msg,
-                    "data": {
-                        "tenant_id": req_body.get("tenant_id") if "req_body" in locals() else None,
-                        "user_id": req_body.get("user_id") if "req_body" in locals() else None,
-                        "user_principal_name": req_body.get("user_principal_name") if "req_body" in locals() else None,
-                    },
-                }
-            ),
+        return create_error_response(
+            error_message=error_msg,
             status_code=500,
-            headers={"Content-Type": "application/json"},
+            data={
+                "tenant_id": req_body.get("tenant_id") if "req_body" in locals() else None,
+                "user_id": req_body.get("user_id") if "req_body" in locals() else None,
+                "user_principal_name": req_body.get("user_principal_name") if "req_body" in locals() else None,
+            },
         )
 
     except Exception as e:
@@ -2097,7 +1978,7 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
 
         # check if tenant exists
         tenants = get_tenants()
-        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        tenant_names = {t["tenant_id"]: t["display_name"] for t in tenants}
 
         if tenant_id not in tenant_names:
             return func.HttpResponse(
@@ -2275,40 +2156,24 @@ def disable_all_inactive_users(req: func.HttpRequest) -> func.HttpResponse:
                 }
             )
 
-        # determine HTTP status code
-        if counters["failed"] == 0 and counters["successfully_disabled"] > 0:
-            status_code = 200  # Complete success - all users disabled
-        else:
-            status_code = 207  # Multi-status - mixed results (including all permissions failures)
-
-        # determine overall success status
-        # Operation completed successfully if it processed users and returned results
-        success_status = True  # Bulk operation completed successfully
-
-        # build final response in your standard format
-        response_data = {
-            "success": success_status,
-            "data": processed_users,
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "operation": "bulk_disable_inactive_users",
-                "inactivity_threshold_days": inactivity_threshold_days,
-                "execution_time": execution_time,
-                "summary": {
-                    "total_identified": len(inactive_users),
-                    "successfully_disabled": counters["successfully_disabled"],
-                    "already_disabled": counters["already_disabled"],
-                    "failed": counters["failed"],
-                    "skipped": counters["skipped"],
-                },
-                "potential_monthly_savings": potential_savings,
+        # build final response using utility function
+        return create_bulk_operation_response(
+            data=processed_users,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="bulk_disable_inactive_users",
+            summary={
+                "total_identified": len(inactive_users),
+                "successfully_disabled": counters["successfully_disabled"],
+                "already_disabled": counters["already_disabled"],
+                "failed": counters["failed"],
+                "skipped": counters["skipped"],
             },
-            "actions": actions,
-        }
-
-        logging.info(f"Bulk disable operation completed: {counters}")
-        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=status_code, headers={"Content-Type": "application/json"})
+            actions=actions,
+            execution_time=execution_time,
+            inactivity_threshold_days=inactivity_threshold_days,
+            potential_monthly_savings=potential_savings,
+        )
 
     except Exception as e:
         error_msg = f"Error in bulk disable operation: {str(e)}"
@@ -2346,40 +2211,24 @@ def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
 
         req_body = req.get_json()
         if not req_body:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "Request body is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="Request body is required", status_code=400)
 
         # get parameters from request
         tenant_id = req_body.get("tenant_id")
 
         # validate required parameters
         if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="tenant_id is required", status_code=400)
 
         if not user_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "user_id is required in URL path"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="user_id is required in URL path", status_code=400)
 
         # check if tenant exists
         tenants = get_tenants()
-        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        tenant_names = {t["tenant_id"]: t["display_name"] for t in tenants}
 
         if tenant_id not in tenant_names:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"Tenant '{tenant_id}' not found", status_code=404)
 
         tenant_name = tenant_names[tenant_id]
         execution_time = datetime.now().isoformat()
@@ -2390,36 +2239,21 @@ def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
         user_result = query(user_query, (tenant_id, user_id))
 
         if not user_result:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"User {user_id} not found in tenant {tenant_id}"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"User {user_id} not found in tenant {tenant_id}", status_code=404)
 
         user = user_result[0]
         logging.info(f"Found user: {user['user_principal_name']}")
 
         # check if user is disabled
         if not user.get("account_enabled", True):
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": f"Cannot reset password for disabled user {user['user_principal_name']}",
-                        "data": [
-                            {"user_id": user["user_id"], "user_principal_name": user["user_principal_name"], "status": "user_disabled"}
-                        ],
-                        "metadata": {
-                            "tenant_id": tenant_id,
-                            "tenant_name": tenant_name,
-                            "operation": "reset_user_password",
-                            "execution_time": execution_time,
-                        },
-                        "actions": [],
-                    }
-                ),
+            return create_error_response(
+                error_message=f"Cannot reset password for disabled user {user['user_principal_name']}",
                 status_code=422,
-                headers={"Content-Type": "application/json"},
+                tenant_id=tenant_id,
+                tenant_name=tenant_name,
+                operation="reset_user_password",
+                data=[{"user_id": user["user_id"], "user_principal_name": user["user_principal_name"], "status": "user_disabled"}],
+                execution_time=execution_time,
             )
 
         # reset password via Graph API
@@ -2431,37 +2265,29 @@ def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
         if reset_result.get("status") != "success":
             error_msg = reset_result.get("error", "Unknown error resetting password")
             logging.error(f"Failed to reset password via Graph API: {error_msg}")
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": f"Failed to reset password: {error_msg}",
-                        "data": [
-                            {
-                                "user_id": user["user_id"],
-                                "user_principal_name": user["user_principal_name"],
-                                "status": "failed",
-                                "error": error_msg,
-                            }
-                        ],
-                        "metadata": {
-                            "tenant_id": tenant_id,
-                            "tenant_name": tenant_name,
-                            "operation": "reset_user_password",
-                            "execution_time": execution_time,
-                            "summary": {"passwords_reset": 0, "failed": 1},
-                        },
-                        "actions": [
-                            {
-                                "type": "review_permissions",
-                                "description": "Review Graph API permissions for password reset",
-                                "users_affected": 1,
-                            }
-                        ],
-                    }
-                ),
+            return create_error_response(
+                error_message=f"Failed to reset password: {error_msg}",
                 status_code=500,
-                headers={"Content-Type": "application/json"},
+                tenant_id=tenant_id,
+                tenant_name=tenant_name,
+                operation="reset_user_password",
+                data=[
+                    {
+                        "user_id": user["user_id"],
+                        "user_principal_name": user["user_principal_name"],
+                        "status": "failed",
+                        "error": error_msg,
+                    }
+                ],
+                execution_time=execution_time,
+                summary={"passwords_reset": 0, "failed": 1},
+                actions=[
+                    {
+                        "type": "review_permissions",
+                        "description": "Review Graph API permissions for password reset",
+                        "users_affected": 1,
+                    }
+                ],
             )
 
         # update local database to track password reset
@@ -2491,43 +2317,29 @@ def reset_user_password(req: func.HttpRequest) -> func.HttpResponse:
             {"type": "monitor_login", "description": "Monitor user's next login to confirm password change", "users_affected": 1},
         ]
 
-        # build final response
-        response_data = {
-            "success": True,
-            "data": [user_data],
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "operation": "reset_user_password",
+        # build final response using utility function
+        return create_success_response(
+            data=[user_data],
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="reset_user_password",
+            metrics={
                 "execution_time": execution_time,
                 "summary": {"passwords_reset": 1, "failed": 0},
             },
-            "actions": actions,
-        }
-
-        logging.info(f"Successfully reset password for user {user['user_principal_name']}")
-        return func.HttpResponse(json.dumps(response_data, indent=2), status_code=200, headers={"Content-Type": "application/json"})
+            actions=actions,
+        )
 
     except Exception as e:
         error_msg = f"Error in password reset operation: {str(e)}"
         logging.error(error_msg)
 
-        return func.HttpResponse(
-            json.dumps(
-                {
-                    "success": False,
-                    "error": error_msg,
-                    "data": [],
-                    "metadata": {
-                        "tenant_id": req_body.get("tenant_id") if "req_body" in locals() else None,
-                        "operation": "reset_user_password",
-                        "execution_time": datetime.now().isoformat(),
-                    },
-                    "actions": [],
-                }
-            ),
+        return create_error_response(
+            error_message=error_msg,
             status_code=500,
-            headers={"Content-Type": "application/json"},
+            tenant_id=req_body.get("tenant_id") if "req_body" in locals() else None,
+            operation="reset_user_password",
+            execution_time=datetime.now().isoformat(),
         )
 
 
@@ -2677,7 +2489,7 @@ def generate_report_manual(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         error_msg = f"Error triggering report generation: {str(e)}"
         logging.error(error_msg)
-        return func.HttpResponse(error_msg, status_code=500)
+        return create_error_response(error_message=error_msg, status_code=500)
 
 
 # @app.timer_trigger(
@@ -2767,11 +2579,7 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
         try:
             request_data = req.get_json()
         except Exception as e:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Invalid JSON in request body: {str(e)}"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"Invalid JSON in request body: {str(e)}", status_code=400)
 
         # Extract and validate required fields
         tenant_id = request_data.get("tenant_id")
@@ -2792,38 +2600,24 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
         logging.info(f"All user_data keys: {list(user_data.keys()) if user_data else 'None'}")
 
         if not tenant_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "tenant_id is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="tenant_id is required", status_code=400)
 
         if not user_data:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "user_data is required"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="user_data is required", status_code=400)
 
         # Validate required user data fields
         required_fields = ["displayName", "passwordProfile"]
         missing_fields = [field for field in required_fields if field not in user_data]
 
         if missing_fields:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Missing required fields in user_data: {', '.join(missing_fields)}"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
+            return create_error_response(
+                error_message=f"Missing required fields in user_data: {', '.join(missing_fields)}", status_code=400
             )
 
         # Validate password profile
         password_profile = user_data.get("passwordProfile", {})
         if "password" not in password_profile:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "password is required in passwordProfile"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="password is required in passwordProfile", status_code=400)
 
         execution_time = datetime.now().isoformat()
 
@@ -2902,26 +2696,20 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
         existing_user_result = query(existing_user_query, (tenant_id, user_principal_name))
 
         if existing_user_result:
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": f"User {user_principal_name} already exists in tenant {tenant_id}",
-                        "data": {
-                            "user_principal_name": user_principal_name,
-                            "tenant_id": tenant_id,
-                            "domain": domain,
-                            "constructed_from": {
-                                "display_name": display_name,
-                                "first_name": first_name,
-                                "last_name": last_name,
-                                "domain": domain,
-                            },
-                        },
-                    }
-                ),
+            return create_error_response(
+                error_message=f"User {user_principal_name} already exists in tenant {tenant_id}",
                 status_code=409,
-                headers={"Content-Type": "application/json"},
+                data={
+                    "user_principal_name": user_principal_name,
+                    "tenant_id": tenant_id,
+                    "domain": domain,
+                    "constructed_from": {
+                        "display_name": display_name,
+                        "first_name": first_name,
+                        "last_name": last_name,
+                        "domain": domain,
+                    },
+                },
             )
 
         # Create user via Graph API
@@ -2932,55 +2720,39 @@ def create_user(req: func.HttpRequest) -> func.HttpResponse:
         except Exception as graph_error:
             error_msg = f"Graph API error: {str(graph_error)}"
             logging.error(f"Failed to create user via Graph API: {error_msg}")
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": f"Failed to create user: {error_msg}",
-                        "data": {
-                            "user_principal_name": user_principal_name,
-                            "tenant_id": tenant_id,
-                            "domain": domain,
-                            "status": "failed",
-                            "error": error_msg,
-                        },
-                        "metadata": {
-                            "tenant_id": tenant_id,
-                            "domain": domain,
-                            "operation": "create_user",
-                            "execution_time": execution_time,
-                        },
-                    }
-                ),
+            return create_error_response(
+                error_message=f"Failed to create user: {error_msg}",
                 status_code=500,
-                headers={"Content-Type": "application/json"},
+                tenant_id=tenant_id,
+                operation="create_user",
+                data={
+                    "user_principal_name": user_principal_name,
+                    "tenant_id": tenant_id,
+                    "domain": domain,
+                    "status": "failed",
+                    "error": error_msg,
+                },
+                domain=domain,
+                execution_time=execution_time,
             )
 
         if create_result.get("status") != "success":
             error_msg = create_result.get("error", "Unknown error creating user")
             logging.error(f"Failed to create user via Graph API: {error_msg}")
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": f"Failed to create user: {error_msg}",
-                        "data": {
-                            "user_principal_name": user_principal_name,
-                            "tenant_id": tenant_id,
-                            "domain": domain,
-                            "status": "failed",
-                            "error": error_msg,
-                        },
-                        "metadata": {
-                            "tenant_id": tenant_id,
-                            "domain": domain,
-                            "operation": "create_user",
-                            "execution_time": execution_time,
-                        },
-                    }
-                ),
+            return create_error_response(
+                error_message=f"Failed to create user: {error_msg}",
                 status_code=500,
-                headers={"Content-Type": "application/json"},
+                tenant_id=tenant_id,
+                operation="create_user",
+                data={
+                    "user_principal_name": user_principal_name,
+                    "tenant_id": tenant_id,
+                    "domain": domain,
+                    "status": "failed",
+                    "error": error_msg,
+                },
+                domain=domain,
+                execution_time=execution_time,
             )
 
         # Extract created user data
@@ -3171,41 +2943,23 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
         # extract and validate request data
         user_id = req.route_params.get("user_id")
         if not user_id:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": "user_id is required in the URL path"}),
-                status_code=400,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message="user_id is required in the URL path", status_code=400)
 
         logging.info(f"Processing user delete request for user_id: {user_id}")
 
-        # get tenant_id from query parameters or use default
+        # get tenant_id from query parameters
         tenant_id = req.params.get("tenant_id")
         if not tenant_id:
-            # Use first available tenant as fallback
-            tenants = get_tenants()
-            if tenants:
-                tenant_id = tenants[0]["tenant_id"]
-                logging.info(f"Using fallback tenant_id: {tenant_id}")
-            else:
-                return func.HttpResponse(
-                    json.dumps({"success": False, "error": "No tenants configured"}),
-                    status_code=500,
-                    headers={"Content-Type": "application/json"},
-                )
-        else:
-            logging.info(f"Using provided tenant_id: {tenant_id}")
+            return create_error_response(error_message="tenant_id parameter is required", status_code=400)
+
+        logging.info(f"Using provided tenant_id: {tenant_id}")
 
         # check if tenant exists
         tenants = get_tenants()
-        tenant_names = {t["tenant_id"]: t["name"] for t in tenants}
+        tenant_names = {t["tenant_id"]: t["display_name"] for t in tenants}
 
         if tenant_id not in tenant_names:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"Tenant '{tenant_id}' not found"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"Tenant '{tenant_id}' not found", status_code=404)
 
         tenant_name = tenant_names[tenant_id]
         logging.info(f"Deleting user for tenant: {tenant_name}")
@@ -3216,34 +2970,27 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
         identifier = f"user_id: {user_id}"
 
         if not user_result:
-            return func.HttpResponse(
-                json.dumps({"success": False, "error": f"User not found ({identifier})"}),
-                status_code=404,
-                headers={"Content-Type": "application/json"},
-            )
+            return create_error_response(error_message=f"User not found ({identifier})", status_code=404)
 
         user = user_result[0]
         logging.info(f"Found user: {user['user_principal_name']}")
 
         # Safety check: require disabled users before deletion
         if user.get("account_enabled", True):
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": "User must be disabled before deletion for safety",
-                        "data": {
-                            "user_id": user["user_id"],
-                            "user_principal_name": user["user_principal_name"],
-                            "tenant_id": tenant_id,
-                            "tenant_name": tenant_name,
-                            "status": "active_user",
-                            "note": "Disable user first, then delete",
-                        },
-                    }
-                ),
+            return create_error_response(
+                error_message="User must be disabled before deletion for safety",
                 status_code=422,
-                headers={"Content-Type": "application/json"},
+                tenant_id=tenant_id,
+                tenant_name=tenant_name,
+                operation="delete_user",
+                data={
+                    "user_id": user["user_id"],
+                    "user_principal_name": user["user_principal_name"],
+                    "tenant_id": tenant_id,
+                    "tenant_name": tenant_name,
+                    "status": "active_user",
+                    "note": "Disable user first, then delete",
+                },
             )
 
         # Safety check: warn about global admins
@@ -3260,23 +3007,20 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
             error_msg = delete_result.get("error", "Unknown error")
             logging.error(f"Failed to delete user: {error_msg}")
 
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "success": False,
-                        "error": f"Failed to delete user: {error_msg}",
-                        "data": {
-                            "user_id": user["user_id"],
-                            "user_principal_name": user["user_principal_name"],
-                            "tenant_id": tenant_id,
-                            "tenant_name": tenant_name,
-                            "status": "failed",
-                            "error": error_msg,
-                        },
-                    }
-                ),
+            return create_error_response(
+                error_message=f"Failed to delete user: {error_msg}",
                 status_code=500,
-                headers={"Content-Type": "application/json"},
+                tenant_id=tenant_id,
+                tenant_name=tenant_name,
+                operation="delete_user",
+                data={
+                    "user_id": user["user_id"],
+                    "user_principal_name": user["user_principal_name"],
+                    "tenant_id": tenant_id,
+                    "tenant_name": tenant_name,
+                    "status": "failed",
+                    "error": error_msg,
+                },
             )
 
         # Remove user and related records from local database
@@ -3292,23 +3036,19 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
             logging.warning(f"Failed to remove user from database: {str(db_error)}")
             # Continue anyway as the user was deleted from Graph API
 
-        # Return success response
-        return func.HttpResponse(
-            json.dumps(
-                {
-                    "success": True,
-                    "message": f"User {user['user_principal_name']} deleted successfully",
-                    "data": {
-                        "user_id": user["user_id"],
-                        "user_principal_name": user["user_principal_name"],
-                        "tenant_id": tenant_id,
-                        "tenant_name": tenant_name,
-                        "deleted_at": datetime.now().isoformat(),
-                    },
-                }
-            ),
-            status_code=200,
-            headers={"Content-Type": "application/json"},
+        # Return success response using utility function
+        return create_success_response(
+            data={
+                "user_id": user["user_id"],
+                "user_principal_name": user["user_principal_name"],
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "deleted_at": datetime.now().isoformat(),
+            },
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="delete_user",
+            message=f"User {user['user_principal_name']} deleted successfully",
         )
 
     except Exception as e:
@@ -3316,12 +3056,8 @@ def delete_user(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(error_msg)
         logging.exception("Full exception details:")
 
-        return func.HttpResponse(
-            json.dumps(
-                {"success": False, "error": error_msg, "metadata": {"operation": "delete_user", "timestamp": datetime.now().isoformat()}}
-            ),
-            status_code=500,
-            headers={"Content-Type": "application/json"},
+        return create_error_response(
+            error_message=error_msg, status_code=500, operation="delete_user", timestamp=datetime.now().isoformat()
         )
 
 
@@ -3510,45 +3246,23 @@ def disable_users_bulk(req: func.HttpRequest) -> func.HttpResponse:
                 }
             )
 
-        # determine HTTP status code
-        if counters["failed"] == 0 and counters["successfully_disabled"] > 0:
-            status_code = 200  # Complete success - all users disabled
-        elif counters["failed"] > 0 and counters["successfully_disabled"] > 0:
-            status_code = 207  # Multi-status - mixed results
-        else:
-            status_code = 500  # All failed
-
-        # determine overall success status
-        success_status = counters["failed"] == 0 or counters["successfully_disabled"] > 0
-
-        # build final response
-        response_data = {
-            "success": success_status,
-            "data": processed_users,
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "operation": "bulk_disable_selected_users",
-                # "dry_run": dry_run,  # Commented out for production testing
-                "execution_time": execution_time,
-                "summary": {
-                    "total_requested": len(user_ids),
-                    "total_found": len(selected_users),
-                    "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
-                    "successfully_disabled": counters["successfully_disabled"],
-                    "already_disabled": counters["already_disabled"],
-                    "failed": counters["failed"],
-                    "skipped": counters["skipped"],
-                },
+        # build final response using utility function
+        return create_bulk_operation_response(
+            data=processed_users,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="bulk_disable_selected_users",
+            summary={
+                "total_requested": len(user_ids),
+                "total_found": len(selected_users),
+                "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
+                "successfully_disabled": counters["successfully_disabled"],
+                "already_disabled": counters["already_disabled"],
+                "failed": counters["failed"],
+                "skipped": counters["skipped"],
             },
-            "actions": actions,
-        }
-
-        logging.info(f"Bulk disable operation completed. Summary: {counters}")
-        return func.HttpResponse(
-            json.dumps(response_data, indent=2),
-            status_code=status_code,
-            headers={"Content-Type": "application/json"},
+            actions=actions,
+            execution_time=execution_time,
         )
 
     except Exception as e:
@@ -3757,43 +3471,22 @@ def reset_password_bulk(req: func.HttpRequest) -> func.HttpResponse:
                 }
             )
 
-        # determine HTTP status code
-        if counters["failed"] == 0 and counters["successfully_reset"] > 0:
-            status_code = 200  # Complete success - all passwords reset
-        elif counters["failed"] > 0 and counters["successfully_reset"] > 0:
-            status_code = 207  # Multi-status - mixed results
-        else:
-            status_code = 500  # All failed
-
-        # determine overall success status
-        success_status = counters["failed"] == 0 or counters["successfully_reset"] > 0
-
-        # build final response
-        response_data = {
-            "success": success_status,
-            "data": processed_users,
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "operation": "bulk_reset_password_selected_users",
-                "execution_time": execution_time,
-                "summary": {
-                    "total_requested": len(user_ids),
-                    "total_found": len(selected_users),
-                    "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
-                    "successfully_reset": counters["successfully_reset"],
-                    "failed": counters["failed"],
-                    "skipped": counters["skipped"],
-                },
+        # build final response using utility function
+        return create_bulk_operation_response(
+            data=processed_users,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="bulk_reset_password_selected_users",
+            summary={
+                "total_requested": len(user_ids),
+                "total_found": len(selected_users),
+                "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
+                "successfully_reset": counters["successfully_reset"],
+                "failed": counters["failed"],
+                "skipped": counters["skipped"],
             },
-            "actions": actions,
-        }
-
-        logging.info(f"Bulk password reset operation completed. Summary: {counters}")
-        return func.HttpResponse(
-            json.dumps(response_data, indent=2),
-            status_code=status_code,
-            headers={"Content-Type": "application/json"},
+            actions=actions,
+            execution_time=execution_time,
         )
 
     except Exception as e:
@@ -4013,44 +3706,23 @@ def assign_license_bulk(req: func.HttpRequest) -> func.HttpResponse:
                 }
             )
 
-        # determine HTTP status code
-        if counters["failed"] == 0 and counters["successfully_assigned"] > 0:
-            status_code = 200  # Complete success - all licenses assigned
-        elif counters["failed"] > 0 and counters["successfully_assigned"] > 0:
-            status_code = 207  # Multi-status - mixed results
-        else:
-            status_code = 500  # All failed
-
-        # determine overall success status
-        success_status = counters["failed"] == 0 or counters["successfully_assigned"] > 0
-
-        # build final response
-        response_data = {
-            "success": success_status,
-            "data": processed_users,
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "operation": "bulk_assign_license_selected_users",
-                "license_sku": license_sku,
-                "execution_time": execution_time,
-                "summary": {
-                    "total_requested": len(user_ids),
-                    "total_found": len(selected_users),
-                    "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
-                    "successfully_assigned": counters["successfully_assigned"],
-                    "failed": counters["failed"],
-                    "skipped": counters["skipped"],
-                },
+        # build final response using utility function
+        return create_bulk_operation_response(
+            data=processed_users,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="bulk_assign_license_selected_users",
+            summary={
+                "total_requested": len(user_ids),
+                "total_found": len(selected_users),
+                "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
+                "successfully_assigned": counters["successfully_assigned"],
+                "failed": counters["failed"],
+                "skipped": counters["skipped"],
             },
-            "actions": actions,
-        }
-
-        logging.info(f"Bulk license assignment operation completed. Summary: {counters}")
-        return func.HttpResponse(
-            json.dumps(response_data, indent=2),
-            status_code=status_code,
-            headers={"Content-Type": "application/json"},
+            actions=actions,
+            execution_time=execution_time,
+            license_sku=license_sku,
         )
 
     except Exception as e:
@@ -4276,44 +3948,23 @@ def assign_role_bulk(req: func.HttpRequest) -> func.HttpResponse:
                 }
             )
 
-        # determine HTTP status code
-        if counters["failed"] == 0 and counters["successfully_assigned"] > 0:
-            status_code = 200  # Complete success - all roles assigned
-        elif counters["failed"] > 0 and counters["successfully_assigned"] > 0:
-            status_code = 207  # Multi-status - mixed results
-        else:
-            status_code = 500  # All failed
-
-        # determine overall success status
-        success_status = counters["failed"] == 0 or counters["successfully_assigned"] > 0
-
-        # build final response
-        response_data = {
-            "success": success_status,
-            "data": processed_users,
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "operation": "bulk_assign_role_selected_users",
-                "role_name": role_name,
-                "execution_time": execution_time,
-                "summary": {
-                    "total_requested": len(user_ids),
-                    "total_found": len(selected_users),
-                    "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
-                    "successfully_assigned": counters["successfully_assigned"],
-                    "failed": counters["failed"],
-                    "skipped": counters["skipped"],
-                },
+        # build final response using utility function
+        return create_bulk_operation_response(
+            data=processed_users,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="bulk_assign_role_selected_users",
+            summary={
+                "total_requested": len(user_ids),
+                "total_found": len(selected_users),
+                "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
+                "successfully_assigned": counters["successfully_assigned"],
+                "failed": counters["failed"],
+                "skipped": counters["skipped"],
             },
-            "actions": actions,
-        }
-
-        logging.info(f"Bulk role assignment operation completed. Summary: {counters}")
-        return func.HttpResponse(
-            json.dumps(response_data, indent=2),
-            status_code=status_code,
-            headers={"Content-Type": "application/json"},
+            actions=actions,
+            execution_time=execution_time,
+            role_name=role_name,
         )
 
     except Exception as e:
@@ -4542,43 +4193,22 @@ def delete_user_bulk(req: func.HttpRequest) -> func.HttpResponse:
                 }
             )
 
-        # determine HTTP status code
-        if counters["failed"] == 0 and counters["successfully_deleted"] > 0:
-            status_code = 200  # Complete success - all users deleted
-        elif counters["failed"] > 0 and counters["successfully_deleted"] > 0:
-            status_code = 207  # Multi-status - mixed results
-        else:
-            status_code = 500  # All failed
-
-        # determine overall success status
-        success_status = counters["failed"] == 0 or counters["successfully_deleted"] > 0
-
-        # build final response
-        response_data = {
-            "success": success_status,
-            "data": processed_users,
-            "metadata": {
-                "tenant_id": tenant_id,
-                "tenant_name": tenant_name,
-                "operation": "bulk_delete_selected_users",
-                "execution_time": execution_time,
-                "summary": {
-                    "total_requested": len(user_ids),
-                    "total_found": len(selected_users),
-                    "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
-                    "successfully_deleted": counters["successfully_deleted"],
-                    "failed": counters["failed"],
-                    "skipped": counters["skipped"],
-                },
+        # build final response using utility function
+        return create_bulk_operation_response(
+            data=processed_users,
+            tenant_id=tenant_id,
+            tenant_name=tenant_name,
+            operation="bulk_delete_selected_users",
+            summary={
+                "total_requested": len(user_ids),
+                "total_found": len(selected_users),
+                "missing_user_ids": list(missing_user_ids) if missing_user_ids else [],
+                "successfully_deleted": counters["successfully_deleted"],
+                "failed": counters["failed"],
+                "skipped": counters["skipped"],
             },
-            "actions": actions,
-        }
-
-        logging.info(f"Bulk user deletion operation completed. Summary: {counters}")
-        return func.HttpResponse(
-            json.dumps(response_data, indent=2),
-            status_code=status_code,
-            headers={"Content-Type": "application/json"},
+            actions=actions,
+            execution_time=execution_time,
         )
 
     except Exception as e:

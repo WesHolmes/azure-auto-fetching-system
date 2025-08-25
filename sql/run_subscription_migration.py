@@ -20,7 +20,7 @@ from sql.databaseV2 import get_connection
 
 def run_migration():
     """Run the subscription table migration"""
-    db_path = Path(__file__).parent.parent / "data" / "graph_sync.db"
+    db_path = Path(__file__).parent / "data" / "graph_sync.db"
 
     if not db_path.exists():
         print(f"Database not found at {db_path}")

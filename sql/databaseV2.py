@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 def get_connection():
     """Get database connection"""
-    path = os.getenv("DATABASE_PATH", "./data/graph_sync.db")
+    path = os.getenv("DATABASE_PATH", "./sql/data/graph_sync.db")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     return sqlite3.connect(path)
 

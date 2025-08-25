@@ -186,7 +186,17 @@ def main():
     """Main function to run all migrations"""
 
     # Look for database files in common locations
-    possible_paths = ["data/users.db", "data/tenant_data.db", "data/graph_sync.db", "users.db", "tenant_data.db", "graph_sync.db"]
+    possible_paths = [
+        "sql/data/users.db",
+        "sql/data/tenant_data.db",
+        "sql/data/graph_sync.db",
+        "data/users.db",
+        "data/tenant_data.db",
+        "data/graph_sync.db",
+        "users.db",
+        "tenant_data.db",
+        "graph_sync.db",
+    ]
 
     # Also check current directory for .db files
     current_dir = Path(".")

@@ -1,8 +1,9 @@
 from datetime import datetime
 import logging
 
-from core.databaseV2 import init_schema, query, upsert_many
 from core.graph_beta_client import GraphBetaClient
+from sql.databaseV2 import init_schema, query, upsert_many
+from utils.http import clean_error_message
 
 
 logger = logging.getLogger(__name__)
@@ -33,18 +34,8 @@ def fetch_tenant_subscriptions(tenant_id):
         return subscriptions
 
     except Exception as e:
-        # Clean up error message for better console readability
-        if "401 Unauthorized" in str(e):
-            error_msg = "✗ Failed to fetch subscriptions: Authentication failed (401 Unauthorized)"
-        elif "403 Forbidden" in str(e):
-            error_msg = "✗ Failed to fetch subscriptions: Access denied (403 Forbidden)"
-        elif "404 Not Found" in str(e):
-            error_msg = "✗ Failed to fetch subscriptions: Resource not found (404)"
-        elif "500 Internal Server Error" in str(e):
-            error_msg = "✗ Failed to fetch subscriptions: Server error (500)"
-        else:
-            error_msg = f"✗ Failed to fetch subscriptions: {str(e)}"
-
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), "Failed to fetch subscriptions")
         logger.error(error_msg)
         # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
@@ -114,18 +105,8 @@ def sync_subscriptions(tenant_id, tenant_name):
         }
 
     except Exception as e:
-        # Clean up error message for better console readability
-        if "401 Unauthorized" in str(e):
-            error_msg = f"✗ {tenant_name}: Authentication failed (401 Unauthorized)"
-        elif "403 Forbidden" in str(e):
-            error_msg = f"✗ {tenant_name}: Access denied (403 Forbidden)"
-        elif "404 Not Found" in str(e):
-            error_msg = f"✗ {tenant_name}: Resource not found (404)"
-        elif "500 Internal Server Error" in str(e):
-            error_msg = f"✗ {tenant_name}: Server error (500)"
-        else:
-            error_msg = f"✗ {tenant_name}: {str(e)}"
-
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), tenant_name=tenant_name)
         logger.error(error_msg)
         # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for {tenant_name}: {str(e)}", exc_info=True)

@@ -1,8 +1,9 @@
 from datetime import datetime
 import logging
 
-from core.databaseV2 import init_schema, upsert_many
 from core.graph_beta_client import GraphBetaClient
+from sql.databaseV2 import init_schema, upsert_many
+from utils.http import clean_error_message
 
 
 logger = logging.getLogger(__name__)
@@ -34,19 +35,10 @@ def fetch_tenant_groups(tenant_id):
         return groups
 
     except Exception as e:
-        # Clean up error message for better console readability
-        if "401 Unauthorized" in str(e):
-            error_msg = "✗ Failed to fetch groups: Authentication failed (401 Unauthorized)"
-        elif "403 Forbidden" in str(e):
-            error_msg = "✗ Failed to fetch groups: Access denied (403 Forbidden)"
-        elif "404 Not Found" in str(e):
-            error_msg = "✗ Failed to fetch groups: Resource not found (404)"
-        elif "500 Internal Server Error" in str(e):
-            error_msg = "✗ Failed to fetch groups: Server error (500)"
-        else:
-            error_msg = f"✗ Failed to fetch groups: {str(e)}"
-
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), "Failed to fetch groups")
         logger.error(error_msg)
+
         # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
 
@@ -199,18 +191,8 @@ def transform_group_data(groups, tenant_id):
         return group_records, user_group_records
 
     except Exception as e:
-        # Clean up error message for better console readability
-        if "401 Unauthorized" in str(e):
-            error_msg = "✗ Failed to transform groups: Authentication failed (401 Unauthorized)"
-        elif "403 Forbidden" in str(e):
-            error_msg = "✗ Failed to transform groups: Access denied (403 Forbidden)"
-        elif "404 Not Found" in str(e):
-            error_msg = "✗ Failed to transform groups: Resource not found (404)"
-        elif "500 Internal Server Error" in str(e):
-            error_msg = "✗ Failed to transform groups: Server error (500)"
-        else:
-            error_msg = f"✗ Failed to transform groups: {str(e)}"
-
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), "Failed to transform groups")
         logger.error(error_msg)
         # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
@@ -244,7 +226,7 @@ def sync_groups(tenant_id, tenant_name):
         group_records, user_group_records = transform_group_data(groups, tenant_id)
 
         # Store in database
-        from core.databaseV2 import get_connection
+        from sql.databaseV2 import get_connection
 
         conn = get_connection()
         cursor = conn.cursor()
@@ -266,7 +248,7 @@ def sync_groups(tenant_id, tenant_name):
             logger.info(f"Stored {len(user_group_records)} user group assignments")
 
         # Count total groups and memberships after sync
-        from core.databaseV2 import query
+        from sql.databaseV2 import query
 
         total_groups = query(
             """
@@ -308,18 +290,8 @@ def sync_groups(tenant_id, tenant_name):
         }
 
     except Exception as e:
-        # Clean up error message for better console readability
-        if "401 Unauthorized" in str(e):
-            error_msg = f"✗ {tenant_name}: Authentication failed (401 Unauthorized)"
-        elif "403 Forbidden" in str(e):
-            error_msg = f"✗ {tenant_name}: Access denied (403 Forbidden)"
-        elif "404 Not Found" in str(e):
-            error_msg = f"✗ {tenant_name}: Resource not found (404)"
-        elif "500 Internal Server Error" in str(e):
-            error_msg = f"✗ {tenant_name}: Server error (500)"
-        else:
-            error_msg = f"✗ {tenant_name}: {str(e)}"
-
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), tenant_name=tenant_name)
         logger.error(error_msg)
         # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for {tenant_name}: {str(e)}", exc_info=True)
@@ -335,7 +307,7 @@ def sync_groups(tenant_id, tenant_name):
 def get_user_groups(tenant_id, user_id):
     """Get all groups for a specific user"""
     try:
-        from core.databaseV2 import query
+        from sql.databaseV2 import query
 
         groups = query(
             """
@@ -362,7 +334,7 @@ def get_user_groups(tenant_id, user_id):
 def get_group_members(tenant_id, group_id):
     """Get all members of a specific group"""
     try:
-        from core.databaseV2 import query
+        from sql.databaseV2 import query
 
         members = query(
             """

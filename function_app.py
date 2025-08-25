@@ -9,30 +9,16 @@ from analysis.user_analysis import (
     calculate_license_optimization,
     calculate_mfa_compliance,
 )
-from core.databaseV2 import execute_query, query, upsert_many
-from core.error_reporting import aggregate_recent_sync_errors, categorize_sync_errors
 from core.graph_beta_client import GraphBetaClient
 from core.tenant_manager import get_tenants
+from sql.databaseV2 import execute_query, query, upsert_many
 from sync.group_syncV2 import sync_groups
 from sync.license_syncV2 import sync_licenses_v2
 from sync.role_syncV2 import sync_rolesV2
 from sync.subscription_syncV2 import sync_subscriptions
 from sync.user_syncV2 import sync_users as sync_users_v2
-from utils.http import create_bulk_operation_response, create_error_response, create_success_response
-
-
-def clean_error_message(error_str, tenant_name):
-    """Clean up error messages for better console readability"""
-    if "401 Unauthorized" in error_str:
-        return f"✗ {tenant_name}: Authentication failed (401 Unauthorized)"
-    elif "403 Forbidden" in error_str:
-        return f"✗ {tenant_name}: Access denied (403 Forbidden)"
-    elif "404 Not Found" in error_str:
-        return f"✗ {tenant_name}: Resource not found (404)"
-    elif "500 Internal Server Error" in error_str:
-        return f"✗ {tenant_name}: Server error (500)"
-    else:
-        return f"✗ {tenant_name}: {error_str}"
+from utils.error_reporting import aggregate_recent_sync_errors, categorize_sync_errors
+from utils.http import clean_error_message, create_bulk_operation_response, create_error_response, create_success_response
 
 
 # from sync.hibp_sync import sync_hibp_breaches

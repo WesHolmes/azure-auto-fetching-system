@@ -5,6 +5,61 @@ from typing import Any
 import azure.functions as func
 
 
+def clean_error_message(error_str: str, context: str = "", tenant_name: str = "") -> str:
+    """
+    Clean up error messages for better console readability.
+
+    Args:
+        error_str: The original error string
+        context: Context about what operation failed (e.g., "Failed to fetch groups")
+        tenant_name: Optional tenant name to include in the error
+
+    Returns:
+        Clean, readable error message
+    """
+    # Common HTTP error patterns
+    if "401 Unauthorized" in error_str:
+        if tenant_name:
+            return f"✗ {tenant_name}: Authentication failed (401 Unauthorized)"
+        elif context:
+            return f"✗ {context}: Authentication failed (401 Unauthorized)"
+        else:
+            return "✗ Authentication failed (401 Unauthorized)"
+
+    elif "403 Forbidden" in error_str:
+        if tenant_name:
+            return f"✗ {tenant_name}: Access denied (403 Forbidden)"
+        elif context:
+            return f"✗ {context}: Access denied (403 Forbidden)"
+        else:
+            return "✗ Access denied (403 Forbidden)"
+
+    elif "404 Not Found" in error_str:
+        if tenant_name:
+            return f"✗ {tenant_name}: Resource not found (404)"
+        elif context:
+            return f"✗ {context}: Resource not found (404)"
+        else:
+            return "✗ Resource not found (404)"
+
+    elif "500 Internal Server Error" in error_str:
+        if tenant_name:
+            return f"✗ {tenant_name}: Server error (500)"
+        elif context:
+            return f"✗ {context}: Server error (500)"
+        else:
+            return "✗ Server error (500)"
+
+    else:
+        # For other errors, include context if available
+        if tenant_name:
+            return f"✗ {tenant_name}: {error_str}"
+        elif context:
+            return f"✗ {context}: {error_str}"
+        else:
+            return f"✗ {error_str}"
+
+
 def create_metadata(tenant_id: str, tenant_name: str, operation: str, **additional_fields) -> dict[str, Any]:
     metadata = {
         "tenant_id": tenant_id,

@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 import logging
 from typing import Any
 
-from core.databaseV2 import execute_query, query
+from sql.databaseV2 import execute_query, query
 
 
 # configure logging for azure functions

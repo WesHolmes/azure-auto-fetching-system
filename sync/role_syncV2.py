@@ -2,8 +2,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import logging
 
-from core.databaseV2 import init_schema, upsert_many
 from core.graph_beta_client import GraphBetaClient
+from sql.databaseV2 import init_schema, upsert_many
+from utils.http import clean_error_message
 
 
 logger = logging.getLogger(__name__)
@@ -44,18 +45,8 @@ def fetch_role_members(tenant_id, role_id):
         return members
 
     except Exception as e:
-        # Clean up error message for better console readability
-        if "401 Unauthorized" in str(e):
-            error_msg = "✗ Failed to fetch role members: Authentication failed (401 Unauthorized)"
-        elif "403 Forbidden" in str(e):
-            error_msg = "✗ Failed to fetch role members: Access denied (403 Forbidden)"
-        elif "404 Not Found" in str(e):
-            error_msg = "✗ Failed to fetch role members: Resource not found (404)"
-        elif "500 Internal Server Error" in str(e):
-            error_msg = "✗ Failed to fetch role members: Server error (500)"
-        else:
-            error_msg = f"✗ Failed to fetch role members: {str(e)}"
-
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), "Failed to fetch role members")
         logger.error(error_msg)
         # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for role {role_id} in tenant {tenant_id}: {str(e)}", exc_info=True)
@@ -149,7 +140,7 @@ def sync_roles(tenant_id):
         role_records, user_role_records = transform_role_data(roles, tenant_id)
 
         # Store in database
-        from core.databaseV2 import get_connection
+        from sql.databaseV2 import get_connection
 
         conn = get_connection()
         cursor = conn.cursor()
@@ -187,18 +178,8 @@ def sync_roles(tenant_id):
     except Exception as e:
         duration = (datetime.utcnow() - start_time).total_seconds()
 
-        # Clean up error message for better console readability
-        if "401 Unauthorized" in str(e):
-            error_msg = f"✗ Tenant {tenant_id}: Authentication failed (401 Unauthorized)"
-        elif "403 Forbidden" in str(e):
-            error_msg = f"✗ Tenant {tenant_id}: Access denied (403 Forbidden)"
-        elif "404 Not Found" in str(e):
-            error_msg = f"✗ Tenant {tenant_id}: Resource not found (404)"
-        elif "500 Internal Server Error" in str(e):
-            error_msg = f"✗ Tenant {tenant_id}: Server error (500)"
-        else:
-            error_msg = f"✗ Tenant {tenant_id}: {str(e)}"
-
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), f"Tenant {tenant_id}")
         logger.error(error_msg)
         # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
@@ -272,18 +253,8 @@ def sync_rolesV2(tenant_ids):
         }
 
     except Exception as e:
-        # Clean up error message for better console readability
-        if "401 Unauthorized" in str(e):
-            error_msg = "✗ Multi-tenant role sync: Authentication failed (401 Unauthorized)"
-        elif "403 Forbidden" in str(e):
-            error_msg = "✗ Multi-tenant role sync: Access denied (403 Forbidden)"
-        elif "404 Not Found" in str(e):
-            error_msg = "✗ Multi-tenant role sync: Resource not found (404)"
-        elif "500 Internal Server Error" in str(e):
-            error_msg = "✗ Multi-tenant role sync: Server error (500)"
-        else:
-            error_msg = f"✗ Multi-tenant role sync: {str(e)}"
-
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), "Multi-tenant role sync")
         logger.error(error_msg)
         # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for multi-tenant role sync: {str(e)}", exc_info=True)

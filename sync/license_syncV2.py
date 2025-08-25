@@ -1,8 +1,9 @@
 from datetime import UTC, datetime, timedelta
 import logging
 
-from core.databaseV2 import execute_query, init_schema, query, upsert_many
 from core.graph_beta_client import GraphBetaClient
+from sql.databaseV2 import execute_query, init_schema, query, upsert_many
+from utils.http import clean_error_message
 
 
 logger = logging.getLogger(__name__)
@@ -20,18 +21,8 @@ def fetch_tenant_licenses(tenant_id):
         return licenses
 
     except Exception as e:
-        # Clean up error message for better console readability
-        if "401 Unauthorized" in str(e):
-            error_msg = "✗ Failed to fetch licenses: Authentication failed (401 Unauthorized)"
-        elif "403 Forbidden" in str(e):
-            error_msg = "✗ Failed to fetch licenses: Access denied (403 Forbidden)"
-        elif "404 Not Found" in str(e):
-            error_msg = "✗ Failed to fetch licenses: Resource not found (404)"
-        elif "500 Internal Server Error" in str(e):
-            error_msg = "✗ Failed to fetch licenses: Server error (500)"
-        else:
-            error_msg = f"✗ Failed to fetch licenses: {str(e)}"
-
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), "Failed to fetch licenses")
         logger.error(error_msg)
         # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
@@ -268,7 +259,7 @@ def sync_licenses_v2(tenant_id, tenant_name):
         # Store user licenses using DELETE + INSERT approach (same as role/group sync)
         if user_license_records:
             # Clear existing user license records for this tenant first
-            from core.databaseV2 import get_connection
+            from sql.databaseV2 import get_connection
 
             conn = get_connection()
             cursor = conn.cursor()
@@ -338,18 +329,8 @@ def sync_licenses_v2(tenant_id, tenant_name):
         }
 
     except Exception as e:
-        # Clean up error message for better console readability
-        if "401 Unauthorized" in str(e):
-            error_msg = f"✗ {tenant_name}: Authentication failed (401 Unauthorized)"
-        elif "403 Forbidden" in str(e):
-            error_msg = f"✗ {tenant_name}: Access denied (403 Forbidden)"
-        elif "404 Not Found" in str(e):
-            error_msg = f"✗ {tenant_name}: Resource not found (404)"
-        elif "500 Internal Server Error" in str(e):
-            error_msg = f"✗ {tenant_name}: Server error (500)"
-        else:
-            error_msg = f"✗ {tenant_name}: {str(e)}"
-
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), tenant_name=tenant_name)
         logger.error(error_msg)
         # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for {tenant_name}: {str(e)}", exc_info=True)

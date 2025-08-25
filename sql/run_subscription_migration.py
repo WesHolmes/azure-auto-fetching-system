@@ -15,7 +15,7 @@ import sys
 # Add parent directory to path to import core modules
 sys.path.append(str(Path(__file__).parent.parent))
 
-from core.databaseV2 import get_connection
+from sql.databaseV2 import get_connection
 
 
 def run_migration():

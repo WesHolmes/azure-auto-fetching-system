@@ -27,13 +27,29 @@ def fetch_tenant_groups(tenant_id):
                 "mailNickname",
                 "visibility",
             ],
+            top=999,
         )
 
         logger.info(f"Successfully fetched {len(groups) if groups else 0} groups for tenant {tenant_id}")
         return groups
 
     except Exception as e:
-        logger.error(f"Failed to fetch tenant groups: {str(e)}")
+        # Clean up error message for better console readability
+        if "401 Unauthorized" in str(e):
+            error_msg = "✗ Failed to fetch groups: Authentication failed (401 Unauthorized)"
+        elif "403 Forbidden" in str(e):
+            error_msg = "✗ Failed to fetch groups: Access denied (403 Forbidden)"
+        elif "404 Not Found" in str(e):
+            error_msg = "✗ Failed to fetch groups: Resource not found (404)"
+        elif "500 Internal Server Error" in str(e):
+            error_msg = "✗ Failed to fetch groups: Server error (500)"
+        else:
+            error_msg = f"✗ Failed to fetch groups: {str(e)}"
+
+        logger.error(error_msg)
+        # Log full error details at debug level for troubleshooting
+        logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
+
         # Log the detailed error for debugging
         if hasattr(e, "response") and hasattr(e.response, "text"):
             logger.error(f"Response body: {e.response.text}")
@@ -47,7 +63,7 @@ def fetch_group_members(tenant_id, group_id):
         # logger.info(f"Fetching members for group {group_id}")
         graph = GraphBetaClient(tenant_id)
         members = graph.get(f"/groups/{group_id}/members", select=["id", "userPrincipalName", "displayName"])
-        #logger.info(f"Group {group_id}: Found {len(members) if members else 0} members")
+        # logger.info(f"Group {group_id}: Found {len(members) if members else 0} members")
         return members
     except Exception as e:
         logger.warning(f"Failed to fetch members for group {group_id}: {str(e)}")
@@ -183,7 +199,21 @@ def transform_group_data(groups, tenant_id):
         return group_records, user_group_records
 
     except Exception as e:
-        logger.error(f"Failed to transform group data for tenant {tenant_id}: {str(e)}")
+        # Clean up error message for better console readability
+        if "401 Unauthorized" in str(e):
+            error_msg = "✗ Failed to transform groups: Authentication failed (401 Unauthorized)"
+        elif "403 Forbidden" in str(e):
+            error_msg = "✗ Failed to transform groups: Access denied (403 Forbidden)"
+        elif "404 Not Found" in str(e):
+            error_msg = "✗ Failed to transform groups: Resource not found (404)"
+        elif "500 Internal Server Error" in str(e):
+            error_msg = "✗ Failed to transform groups: Server error (500)"
+        else:
+            error_msg = f"✗ Failed to transform groups: {str(e)}"
+
+        logger.error(error_msg)
+        # Log full error details at debug level for troubleshooting
+        logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
         raise
 
 
@@ -278,7 +308,22 @@ def sync_groups(tenant_id, tenant_name):
         }
 
     except Exception as e:
-        logger.error(f"Group sync failed for {tenant_name}: {str(e)}", exc_info=True)
+        # Clean up error message for better console readability
+        if "401 Unauthorized" in str(e):
+            error_msg = f"✗ {tenant_name}: Authentication failed (401 Unauthorized)"
+        elif "403 Forbidden" in str(e):
+            error_msg = f"✗ {tenant_name}: Access denied (403 Forbidden)"
+        elif "404 Not Found" in str(e):
+            error_msg = f"✗ {tenant_name}: Resource not found (404)"
+        elif "500 Internal Server Error" in str(e):
+            error_msg = f"✗ {tenant_name}: Server error (500)"
+        else:
+            error_msg = f"✗ {tenant_name}: {str(e)}"
+
+        logger.error(error_msg)
+        # Log full error details at debug level for troubleshooting
+        logger.debug(f"Full error details for {tenant_name}: {str(e)}", exc_info=True)
+
         return {
             "status": "error",
             "tenant_id": tenant_id,

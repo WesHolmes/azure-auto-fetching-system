@@ -20,7 +20,22 @@ def fetch_tenant_licenses(tenant_id):
         return licenses
 
     except Exception as e:
-        logger.error(f"Failed to fetch tenant licenses: {str(e)}")
+        # Clean up error message for better console readability
+        if "401 Unauthorized" in str(e):
+            error_msg = "✗ Failed to fetch licenses: Authentication failed (401 Unauthorized)"
+        elif "403 Forbidden" in str(e):
+            error_msg = "✗ Failed to fetch licenses: Access denied (403 Forbidden)"
+        elif "404 Not Found" in str(e):
+            error_msg = "✗ Failed to fetch licenses: Resource not found (404)"
+        elif "500 Internal Server Error" in str(e):
+            error_msg = "✗ Failed to fetch licenses: Server error (500)"
+        else:
+            error_msg = f"✗ Failed to fetch licenses: {str(e)}"
+
+        logger.error(error_msg)
+        # Log full error details at debug level for troubleshooting
+        logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
+
         # Log the detailed error for debugging
         if hasattr(e, "response") and hasattr(e.response, "text"):
             logger.error(f"Response body: {e.response.text}")
@@ -110,7 +125,7 @@ def get_sku_display_name(sku_part_number: str) -> str:
     return sku_part_number
 
 
-def sync_licenses(tenant_id, tenant_name):
+def sync_licenses_v2(tenant_id, tenant_name):
     """Sync both tenant licenses and user license assignments"""
 
     # Initialize database schema
@@ -250,10 +265,21 @@ def sync_licenses(tenant_id, tenant_name):
                     }
                     user_license_records.append(user_license_record)
 
-        # Store user licenses
+        # Store user licenses using DELETE + INSERT approach (same as role/group sync)
         if user_license_records:
+            # Clear existing user license records for this tenant first
+            from core.databaseV2 import get_connection
+
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("DELETE FROM user_licensesV2 WHERE tenant_id = ?", (tenant_id,))
+            conn.commit()
+            conn.close()
+
+            # Insert fresh user license records
             upsert_many("user_licensesV2", user_license_records)
-            logger.info(f"Stored {len(user_license_records)} user license assignments from {users_with_licenses} users")
+            logger.info(f"Replaced and stored {len(user_license_records)} user license assignments from {users_with_licenses} users")
 
         # Check for users who previously had licenses but no longer have assignments
         # This catches users who were disabled and had their licenses removed by Microsoft
@@ -307,12 +333,27 @@ def sync_licenses(tenant_id, tenant_name):
         return {
             "status": "success",
             "licenses_synced": len(license_records) if "license_records" in locals() else 0,
-            "user_licenses_synced": len(user_license_records),
+            "user_licenses_replaced": len(user_license_records),
             "inactive_licenses_updated": len(users_to_check) if users_to_check else 0,
         }
 
     except Exception as e:
-        logger.error(f"License sync failed for {tenant_name}: {str(e)}", exc_info=True)
+        # Clean up error message for better console readability
+        if "401 Unauthorized" in str(e):
+            error_msg = f"✗ {tenant_name}: Authentication failed (401 Unauthorized)"
+        elif "403 Forbidden" in str(e):
+            error_msg = f"✗ {tenant_name}: Access denied (403 Forbidden)"
+        elif "404 Not Found" in str(e):
+            error_msg = f"✗ {tenant_name}: Resource not found (404)"
+        elif "500 Internal Server Error" in str(e):
+            error_msg = f"✗ {tenant_name}: Server error (500)"
+        else:
+            error_msg = f"✗ {tenant_name}: {str(e)}"
+
+        logger.error(error_msg)
+        # Log full error details at debug level for troubleshooting
+        logger.debug(f"Full error details for {tenant_name}: {str(e)}", exc_info=True)
+
         return {
             "status": "error",
             "tenant_id": tenant_id,

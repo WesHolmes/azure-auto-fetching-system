@@ -10,9 +10,9 @@ def get_tenants(tenant_mode="single"):
         try:
             with open("data/az_tenants.json") as f:
                 get_tenants._cached_tenants = json.load(f)
-        except Exception:
-            # Fallback to single tenant if file read fails
-            get_tenants._cached_tenants = [{"tenant_id": "3aae0fb1-276f-42f8-8e4d-36ca10cbb779", "name": "warp2"}]
+        except (FileNotFoundError, json.JSONDecodeError, Exception):
+            # Fallback to single tenant if JSON file doesn't exist or fails to load
+            get_tenants._cached_tenants = [{"tenant_id": "3aae0fb1-276f-42f8-8e4d-36ca10cbb779", "display_name": "warp2"}]
 
     return get_tenants._cached_tenants
 

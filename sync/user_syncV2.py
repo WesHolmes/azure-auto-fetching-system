@@ -41,7 +41,21 @@ def fetch_users(tenant_id):
         return users
 
     except Exception as e:
-        logger.error(f"Failed to fetch users for tenant {tenant_id}: {str(e)}", exc_info=True)
+        # Clean up error message for better console readability
+        if "401 Unauthorized" in str(e):
+            error_msg = "✗ Failed to fetch users: Authentication failed (401 Unauthorized)"
+        elif "403 Forbidden" in str(e):
+            error_msg = "✗ Failed to fetch users: Access denied (403 Forbidden)"
+        elif "404 Not Found" in str(e):
+            error_msg = "✗ Failed to fetch users: Resource not found (404)"
+        elif "500 Internal Server Error" in str(e):
+            error_msg = "✗ Failed to fetch users: Server error (500)"
+        else:
+            error_msg = f"✗ Failed to fetch users: {str(e)}"
+
+        logger.error(error_msg)
+        # Log full error details at debug level for troubleshooting
+        logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
         raise
 
 
@@ -122,7 +136,6 @@ def fetch_user_groups_batch(tenant_id, user_ids):
 def transform_user_records(users, tenant_id, mfa_lookup):
     """Transform Graph API users to database records"""
     records = []
-    license_records = []  # Add this back
     start_time = datetime.now()
 
     logger.info(f"Starting transformation of {len(users)} users")
@@ -164,28 +177,8 @@ def transform_user_records(users, tenant_id, mfa_lookup):
             # Get group count and admin status from pre-fetched results
             is_admin, group_count = group_results.get(user_id, (False, 0))
 
-            # Process assigned licenses for user_licenses table
-            if assigned_licenses:
-                try:
-                    for assigned_license in assigned_licenses:
-                        sku_id = assigned_license.get("skuId")
-                        if sku_id:
-                            # We'll populate display name and part number in license_sync
-                            user_license_record = {
-                                "user_id": user_id,
-                                "tenant_id": tenant_id,
-                                "license_id": sku_id,
-                                "user_principal_name": upn,
-                                "license_display_name": "Pending Sync",  # Will be updated by license sync
-                                "license_partnumber": "Pending Sync",  # Will be updated by license sync
-                                "is_active": is_active_license,
-                                "unassigned_date": None,
-                                "monthly_cost": 15.00,  # Default, will be updated
-                                "last_updated": datetime.now().isoformat(),
-                            }
-                            license_records.append(user_license_record)
-                except Exception as e:
-                    logger.warning(f"Could not process licenses for user {user_id}: {str(e)}")
+            # License processing moved to license_syncV2 for cleaner separation of concerns
+            # License sync will handle all user_license records completely
 
             # Handle primary_email (required field)
             primary_email = user.get("mail") or upn or "unknown@domain.com"
@@ -248,8 +241,8 @@ def transform_user_records(users, tenant_id, mfa_lookup):
             }
             records.append(basic_record)
 
-    logger.info(f"Transformation complete: {len(records)} users, {len(license_records)} licenses")
-    return records, license_records  # Return both values
+    logger.info(f"Transformation complete: {len(records)} users")
+    return records  # Only return user records, license sync handles licenses
 
 
 def sync_users(tenant_id, tenant_name):
@@ -271,7 +264,6 @@ def sync_users(tenant_id, tenant_name):
                 "tenant_id": tenant_id,
                 "tenant_name": tenant_name,
                 "users_synced": 0,
-                "user_licenses_synced": 0,
                 "duration_seconds": (datetime.now() - start_time).total_seconds(),
             }
 
@@ -279,11 +271,10 @@ def sync_users(tenant_id, tenant_name):
         mfa_lookup = fetch_user_mfa_status(tenant_id)
 
         # transform data
-        user_records, user_license_records = transform_user_records(users, tenant_id, mfa_lookup)
+        user_records = transform_user_records(users, tenant_id, mfa_lookup)
 
         # store in database with error handling
         users_stored = 0
-        user_licenses_stored = 0
 
         try:
             if user_records:
@@ -293,33 +284,35 @@ def sync_users(tenant_id, tenant_name):
             logger.error(f"Failed to store users for {tenant_name}: {str(e)}", exc_info=True)
             raise
 
-        try:
-            if user_license_records:
-                user_licenses_stored = upsert_many("user_licensesV2", user_license_records)
-                logger.info(f"Stored {user_licenses_stored} user licenses for {tenant_name}")
-        except Exception as e:
-            logger.error(
-                f"Failed to store user licenses for {tenant_name}: {str(e)}",
-                exc_info=True,
-            )
-            # Don't raise here - users were stored successfully
-
         duration = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Completed user sync for {tenant_name}: {users_stored} users, {user_licenses_stored} user licenses in {duration:.1f}s")
+        logger.info(f"Completed user sync for {tenant_name}: {users_stored} users in {duration:.1f}s")
 
         return {
             "status": "success",
             "tenant_id": tenant_id,
             "tenant_name": tenant_name,
             "users_synced": users_stored,
-            "user_licenses_synced": user_licenses_stored,
             "duration_seconds": duration,
         }
 
     except Exception as e:
         duration = (datetime.now() - start_time).total_seconds()
-        error_msg = f"User sync failed for {tenant_name} after {duration:.1f}s: {str(e)}"
-        logger.error(error_msg, exc_info=True)
+
+        # Clean up error message for better console readability
+        if "401 Unauthorized" in str(e):
+            error_msg = f"✗ {tenant_name}: Authentication failed (401 Unauthorized)"
+        elif "403 Forbidden" in str(e):
+            error_msg = f"✗ {tenant_name}: Access denied (403 Forbidden)"
+        elif "404 Not Found" in str(e):
+            error_msg = f"✗ {tenant_name}: Resource not found (404)"
+        elif "500 Internal Server Error" in str(e):
+            error_msg = f"✗ {tenant_name}: Server error (500)"
+        else:
+            error_msg = f"✗ {tenant_name}: {str(e)}"
+
+        logger.error(error_msg)
+        # Log full error details at debug level for troubleshooting
+        logger.debug(f"Full error details for {tenant_name}: {str(e)}", exc_info=True)
 
         return {
             "status": "error",

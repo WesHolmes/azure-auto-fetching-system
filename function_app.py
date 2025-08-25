@@ -14,11 +14,25 @@ from core.error_reporting import aggregate_recent_sync_errors, categorize_sync_e
 from core.graph_beta_client import GraphBetaClient
 from core.tenant_manager import get_tenants
 from sync.group_syncV2 import sync_groups
-from sync.license_syncV2 import sync_licenses as sync_licenses_v2
+from sync.license_syncV2 import sync_licenses_v2
 from sync.role_syncV2 import sync_rolesV2
 from sync.subscription_syncV2 import sync_subscriptions
 from sync.user_syncV2 import sync_users as sync_users_v2
 from utils.http import create_bulk_operation_response, create_error_response, create_success_response
+
+
+def clean_error_message(error_str, tenant_name):
+    """Clean up error messages for better console readability"""
+    if "401 Unauthorized" in error_str:
+        return f"✗ {tenant_name}: Authentication failed (401 Unauthorized)"
+    elif "403 Forbidden" in error_str:
+        return f"✗ {tenant_name}: Access denied (403 Forbidden)"
+    elif "404 Not Found" in error_str:
+        return f"✗ {tenant_name}: Resource not found (404)"
+    elif "500 Internal Server Error" in error_str:
+        return f"✗ {tenant_name}: Server error (500)"
+    else:
+        return f"✗ {tenant_name}: {error_str}"
 
 
 # from sync.hibp_sync import sync_hibp_breaches
@@ -29,7 +43,7 @@ app = func.FunctionApp()
 # TIMER TRIGGERS (Scheduled Functions)
 
 
-@app.schedule(schedule="0 0 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+@app.schedule(schedule="0 */1 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
 def users_syncV2(timer: func.TimerRequest) -> None:
     """V2 User sync using new database schema"""
     if timer.past_due:
@@ -49,7 +63,7 @@ def users_syncV2(timer: func.TimerRequest) -> None:
                         "status": "completed",
                         "tenant_id": tenant["tenant_id"],
                         "users_synced": result["users_synced"],
-                        "user_licenses_synced": result.get("user_licenses_synced", 0),
+                        "user_licenses_synced": result.get("user_licenses_replaced", 0),
                     }
                 )
 
@@ -74,7 +88,7 @@ def users_syncV2(timer: func.TimerRequest) -> None:
                     }
                 )
         except Exception as e:
-            logging.error(f"✗ V2 {tenant['display_name']}: {str(e)}")
+            logging.error(clean_error_message(str(e), tenant["display_name"]))
             results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
     # Use centralized error reporting
@@ -83,7 +97,7 @@ def users_syncV2(timer: func.TimerRequest) -> None:
         categorize_sync_errors(results, "User V2")
 
 
-@app.schedule(schedule="0 30 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+@app.schedule(schedule="15 */1 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
 def licenses_syncV2(timer: func.TimerRequest) -> None:
     """V2 License sync using new database schema"""
     if timer.past_due:
@@ -102,7 +116,7 @@ def licenses_syncV2(timer: func.TimerRequest) -> None:
                         "status": "completed",
                         "tenant_id": tenant["tenant_id"],
                         "licenses_synced": result["licenses_synced"],
-                        "user_licenses_synced": result.get("user_licenses_synced", 0),
+                        "user_licenses_synced": result.get("user_licenses_replaced", 0),
                         "inactive_licenses_updated": result.get("inactive_licenses_updated", 0),
                     }
                 )
@@ -116,7 +130,7 @@ def licenses_syncV2(timer: func.TimerRequest) -> None:
                     }
                 )
         except Exception as e:
-            logging.error(f"✗ V2 {tenant['display_name']}: {str(e)}")
+            logging.error(clean_error_message(str(e), tenant["display_name"]))
             results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
     failed_count = len([r for r in results if r["status"] == "error"])
@@ -124,7 +138,7 @@ def licenses_syncV2(timer: func.TimerRequest) -> None:
         categorize_sync_errors(results, "License V2")
 
 
-@app.schedule(schedule="0 30 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+@app.schedule(schedule="0 */2 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
 def role_syncV2(timer: func.TimerRequest) -> None:
     """V2 Timer trigger for role sync using new database schema"""
     if timer.past_due:
@@ -146,7 +160,7 @@ def role_syncV2(timer: func.TimerRequest) -> None:
         logging.error(f"  V2 Role sync failed: {result.get('error', 'Unknown error')}")
 
 
-@app.schedule(schedule="0 15 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+@app.schedule(schedule="30 */1 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
 def group_syncV2(timer: func.TimerRequest) -> None:
     """V2 Timer trigger for group sync using new database schema"""
     if timer.past_due:
@@ -181,7 +195,7 @@ def group_syncV2(timer: func.TimerRequest) -> None:
                     }
                 )
         except Exception as e:
-            logging.error(f"✗ V2 {tenant['display_name']}: {str(e)}")
+            logging.error(clean_error_message(str(e), tenant["display_name"]))
             results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
     failed_count = len([r for r in results if r["status"] == "error"])
@@ -189,7 +203,7 @@ def group_syncV2(timer: func.TimerRequest) -> None:
         categorize_sync_errors(results, "Group V2")
 
 
-@app.schedule(schedule="0 45 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+@app.schedule(schedule="45 */1 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
 def subscription_syncV2(timer: func.TimerRequest) -> None:
     """V2 Timer trigger for subscription sync using new database schema"""
     if timer.past_due:
@@ -221,7 +235,7 @@ def subscription_syncV2(timer: func.TimerRequest) -> None:
                     }
                 )
         except Exception as e:
-            logging.error(f"✗ V2 {tenant['display_name']}: {str(e)}")
+            logging.error(clean_error_message(str(e), tenant["display_name"]))
             results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
     failed_count = len([r for r in results if r["status"] == "error"])
@@ -241,24 +255,19 @@ def user_sync_v2_http(req: func.HttpRequest) -> func.HttpResponse:
 
         tenants = get_tenants()
         total_users = 0
-        total_licenses = 0
         results = []
 
         for tenant in tenants:
             try:
                 result = sync_users_v2(tenant["tenant_id"], tenant["display_name"])
                 if result["status"] == "success":
-                    logging.info(
-                        f"✓ {tenant['display_name']}: {result['users_synced']} users, {result.get('user_licenses_synced', 0)} license assignments synced"
-                    )
+                    logging.info(f"✓ {tenant['display_name']}: {result['users_synced']} users synced")
                     total_users += result["users_synced"]
-                    total_licenses += result.get("user_licenses_synced", 0)
                     results.append(
                         {
                             "status": "completed",
                             "tenant_id": tenant["tenant_id"],
                             "users_synced": result["users_synced"],
-                            "user_licenses_synced": result.get("user_licenses_synced", 0),
                         }
                     )
                 else:
@@ -271,7 +280,7 @@ def user_sync_v2_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
             except Exception as e:
-                logging.error(f"✗ {tenant['display_name']}: {str(e)}")
+                logging.error(clean_error_message(str(e), tenant["display_name"]))
                 results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
         # Use centralized error reporting (same pattern as other sync functions)
@@ -280,11 +289,11 @@ def user_sync_v2_http(req: func.HttpRequest) -> func.HttpResponse:
             categorize_sync_errors(results, "User V2 HTTP")
 
         return create_success_response(
-            data={"total_users": total_users, "total_licenses": total_licenses, "tenants_processed": len(tenants)},
+            data={"total_users": total_users, "tenants_processed": len(tenants)},
             tenant_id="multi_tenant",
             tenant_name="all_tenants",
             operation="user_sync_v2_http",
-            message=f"Synced {total_users} users and {total_licenses} license assignments across {len(tenants)} tenants",
+            message=f"Synced {total_users} users across {len(tenants)} tenants",
         )
 
     except Exception as e:
@@ -298,7 +307,7 @@ def license_sync_http(req: func.HttpRequest) -> func.HttpResponse:
     """HTTP POST endpoint for license synchronization across all tenants"""
     try:
         logging.info("Starting manual license sync")
-        from sync.license_syncV2 import sync_licenses as sync_licenses_v2
+        from sync.license_syncV2 import sync_licenses_v2
 
         tenants = get_tenants()
         total_licenses = 0
@@ -310,16 +319,16 @@ def license_sync_http(req: func.HttpRequest) -> func.HttpResponse:
                 result = sync_licenses_v2(tenant["tenant_id"], tenant["display_name"])
                 if result["status"] == "success":
                     logging.info(
-                        f"✓ {tenant['display_name']}: {result['licenses_synced']} licenses, {result.get('user_licenses_synced', 0)} user assignments synced"
+                        f"✓ {tenant['display_name']}: {result['licenses_synced']} licenses, {result.get('user_licenses_replaced', 0)} user assignments replaced"
                     )
                     total_licenses += result["licenses_synced"]
-                    total_assignments += result["user_licenses_synced"]
+                    total_assignments += result["user_licenses_replaced"]
                     results.append(
                         {
                             "status": "completed",
                             "tenant_id": tenant["tenant_id"],
                             "licenses_synced": result["licenses_synced"],
-                            "user_licenses_synced": result["user_licenses_synced"],
+                            "user_licenses_synced": result["user_licenses_replaced"],
                         }
                     )
                 else:
@@ -332,7 +341,7 @@ def license_sync_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
             except Exception as e:
-                logging.error(f"✗ {tenant['display_name']}: {str(e)}")
+                logging.error(clean_error_message(str(e), tenant["display_name"]))
                 results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
         # Use centralized error reporting (same pattern as other sync functions)
@@ -436,7 +445,7 @@ def groups_sync_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
             except Exception as e:
-                logging.error(f"✗ {tenant['display_name']}: {str(e)}")
+                logging.error(clean_error_message(str(e), tenant["display_name"]))
                 results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
         # Use centralized error reporting (same pattern as other sync functions)
@@ -491,7 +500,7 @@ def subscriptions_sync_http(req: func.HttpRequest) -> func.HttpResponse:
                         }
                     )
             except Exception as e:
-                logging.error(f"✗ {tenant['display_name']}: {str(e)}")
+                logging.error(clean_error_message(str(e), tenant["display_name"]))
                 results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
 
         # Use centralized error reporting (same pattern as other sync functions)
@@ -1013,8 +1022,8 @@ def get_tenant_licenses(timer: func.TimerRequest) -> None:
             results.append(result)
 
         except Exception as e:
-            logging.error(f"✗ {tenant['display_name']}: {str(e)}")
-            results.append({"status": "error", "tenant_id": tenant["tenant_id"], "tenant_name": tenant["display_name"], "error": str(e)})
+            logging.error(f"✗ {tenant_name}: {str(e)}")
+            results.append({"status": "error", "tenant_id": tenant_id, "tenant_name": tenant_name, "error": str(e)})
 
     # Log summary
     successful_count = len([r for r in results if r["status"] == "completed"])
@@ -1250,8 +1259,8 @@ def get_tenant_roles(timer: func.TimerRequest) -> None:
             results.append(result)
 
         except Exception as e:
-            logging.error(f"✗ {tenant['display_name']}: {str(e)}")
-            results.append({"status": "error", "tenant_id": tenant["tenant_id"], "tenant_name": tenant["display_name"], "error": str(e)})
+            logging.error(f"✗ {tenant_name}: {str(e)}")
+            results.append({"status": "error", "tenant_id": tenant_id, "tenant_name": tenant_name, "error": str(e)})
 
     # Log summary
     successful_count = len([r for r in results if r["status"] == "completed"])
@@ -1477,8 +1486,8 @@ def get_tenant_groups(timer: func.TimerRequest) -> None:
             results.append(result)
 
         except Exception as e:
-            logging.error(f"✗ {tenant['display_name']}: {str(e)}")
-            results.append({"status": "error", "tenant_id": tenant["tenant_id"], "tenant_name": tenant["display_name"], "error": str(e)})
+            logging.error(f"✗ {tenant_name}: {str(e)}")
+            results.append({"status": "error", "tenant_id": tenant_id, "tenant_name": tenant_name, "error": str(e)})
 
     # Log summary
     successful_count = len([r for r in results if r["status"] == "completed"])
@@ -1635,8 +1644,8 @@ def get_tenant_subscriptions(timer: func.TimerRequest) -> None:
             results.append(result)
 
         except Exception as e:
-            logging.error(f"✗ {tenant['display_name']}: {str(e)}")
-            results.append({"status": "error", "tenant_id": tenant["tenant_id"], "tenant_name": tenant["display_name"], "error": str(e)})
+            logging.error(f"✗ {tenant_name}: {str(e)}")
+            results.append({"status": "error", "tenant_id": tenant_id, "tenant_name": tenant_name, "error": str(e)})
 
     # Log summary
     successful_count = len([r for r in results if r["status"] == "completed"])
@@ -2447,7 +2456,7 @@ def generate_user_report(timer: func.TimerRequest) -> None:
                 logging.info(json.dumps(tenant_summary, indent=2))
 
             except Exception as e:
-                logging.error(f"Error processing {tenant['display_name']}: {e}")
+                logging.error(f"Error processing {tenant_name}: {e}")
 
         # Build comprehensive report
         comprehensive_report = {

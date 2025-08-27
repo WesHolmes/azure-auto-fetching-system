@@ -8,7 +8,7 @@ def get_tenants(tenant_mode="single"):
     # Load once at module import, not on every function call
     if not hasattr(get_tenants, "_cached_tenants"):
         try:
-            with open("data/az_tenants.json") as f:
+            with open("sql/data/az_tenants.json") as f:
                 get_tenants._cached_tenants = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError, Exception):
             # Fallback to single tenant if JSON file doesn't exist or fails to load

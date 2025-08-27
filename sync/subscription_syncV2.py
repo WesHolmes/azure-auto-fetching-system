@@ -2,6 +2,7 @@ from datetime import datetime
 import logging
 
 from core.graph_beta_client import GraphBetaClient
+from core.graph_client import GraphClient
 from sql.databaseV2 import init_schema, query, upsert_many
 from utils.http import clean_error_message
 
@@ -9,7 +10,7 @@ from utils.http import clean_error_message
 logger = logging.getLogger(__name__)
 
 
-def fetch_tenant_subscriptions(tenant_id):
+def fetch_beta_tenant_subscriptions(tenant_id):
     """Fetch tenant-level subscription information"""
     try:
         logger.info(f"Fetching tenant subscriptions for {tenant_id}")
@@ -47,6 +48,44 @@ def fetch_tenant_subscriptions(tenant_id):
         return []
 
 
+def fetch_v1_tenant_subscriptions(tenant_id):
+    """Fetch tenant-level subscription information from v1.0 endpoint"""
+    try:
+        logger.info(f"Fetching tenant subscriptions for {tenant_id} using v1.0 endpoint")
+        graph = GraphClient(tenant_id)
+
+        # Get all subscriptions with basic information from v1.0 endpoint
+        subscriptions = graph.get(
+            "/directory/subscriptions",
+            select=[
+                "id",
+                "commerceSubscriptionId",
+                "skuId",
+                "skuPartNumber",
+                "status",
+                "isTrial",
+                "totalLicenses",
+                "nextLifecycleDateTime",
+            ],
+        )
+
+        logger.info(f"Found {len(subscriptions) if subscriptions else 0} subscriptions from v1.0 endpoint")
+        return subscriptions
+
+    except Exception as e:
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), "Failed to fetch subscriptions from v1.0 endpoint")
+        logger.error(error_msg)
+        # Log full error details at debug level for troubleshooting
+        logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
+
+        # Log the detailed error for debugging
+        if hasattr(e, "response") and hasattr(e.response, "text"):
+            logger.error(f"Response body: {e.response.text}")
+        # Return empty list but continue processing
+        return []
+
+
 def sync_subscriptions(tenant_id, tenant_name):
     """Sync tenant subscriptions"""
 
@@ -56,8 +95,38 @@ def sync_subscriptions(tenant_id, tenant_name):
     try:
         logger.info(f"Starting subscription sync for {tenant_name}")
 
-        # Fetch tenant subscriptions
-        tenant_subscriptions = fetch_tenant_subscriptions(tenant_id)
+        # First, detect tenant capability by attempting to fetch signin activity
+        # This determines if the tenant is premium and can access advanced features
+        try:
+            graph = GraphBetaClient(tenant_id)
+            test_user = graph.get("/users", select=["id", "userPrincipalName"], top=1)
+
+            if test_user:
+                # Try to fetch signin activity for the first user to test premium capabilities
+                try:
+                    user_id = test_user[0]["id"]
+                    signin_activity = graph.get(f"/users/{user_id}/signInActivity")
+                    is_premium = True
+                    logger.info(f"Tenant {tenant_id} is premium - using beta endpoint")
+                except Exception:
+                    # Signin activity not accessible, tenant is not premium
+                    is_premium = False
+                    logger.info(f"Tenant {tenant_id} is not premium - using v1.0 endpoint")
+            else:
+                logger.warning(f"No users found in tenant {tenant_id} for capability testing")
+                is_premium = False
+
+        except Exception as capability_error:
+            logger.warning(f"Could not determine tenant capability for {tenant_id}: {str(capability_error)}")
+            is_premium = False
+
+        # Now fetch tenant subscriptions using the appropriate endpoint based on tenant capability
+        if is_premium:
+            # Premium tenant - use beta endpoint for advanced features
+            tenant_subscriptions = fetch_beta_tenant_subscriptions(tenant_id)
+        else:
+            # Non-premium tenant - use v1.0 endpoint for basic features
+            tenant_subscriptions = fetch_v1_tenant_subscriptions(tenant_id)
 
         if tenant_subscriptions:
             # Transform and store subscriptions

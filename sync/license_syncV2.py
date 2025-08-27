@@ -1,7 +1,10 @@
+import csv
 from datetime import UTC, datetime, timedelta
 import logging
+import os
 
 from core.graph_beta_client import GraphBetaClient
+from core.graph_client import GraphClient
 from sql.databaseV2 import execute_query, init_schema, query, upsert_many
 from utils.http import clean_error_message
 
@@ -9,7 +12,7 @@ from utils.http import clean_error_message
 logger = logging.getLogger(__name__)
 
 
-def fetch_tenant_licenses(tenant_id):
+def fetch_beta_tenant_licenses(tenant_id):
     """Fetch tenant-level license information"""
     try:
         logger.info(f"Fetching tenant licenses for {tenant_id}")
@@ -34,7 +37,25 @@ def fetch_tenant_licenses(tenant_id):
         return []
 
 
-def fetch_user_license_details(tenant_id, user_id):
+def fetch_v1_tenant_licenses(tenant_id):
+    """Fetch tenant-level license information from v1.0 endpoint"""
+    try:
+        logger.info(f"Fetching tenant licenses for {tenant_id} using v1.0 endpoint")
+        graph = GraphClient(tenant_id)
+
+        # v1.0 endpoint for subscribed SKUs
+        licenses = graph.get("/subscribedSkus")
+
+        return licenses
+
+    except Exception as e:
+        error_msg = clean_error_message(str(e), "Failed to fetch licenses from v1.0 endpoint")
+        logger.error(error_msg)
+        logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
+        return []
+
+
+def fetch_beta_user_license_details(tenant_id, user_id):
     """Fetch detailed license information for a specific user"""
     try:
         graph = GraphBetaClient(tenant_id)
@@ -45,6 +66,62 @@ def fetch_user_license_details(tenant_id, user_id):
         return license_details
     except Exception as e:
         logger.warning(f"Failed to fetch license details for user {user_id}: {str(e)}")
+        return []
+
+
+def fetch_v1_user_license_details(tenant_id, user_id):
+    """Fetch detailed license information for a specific user from v1.0 endpoint"""
+    try:
+        graph = GraphClient(tenant_id)
+        license_details = graph.get(
+            f"/users/{user_id}/licenseDetails",
+            select=["skuId", "skuPartNumber", "servicePlans"],
+        )
+        return license_details
+    except Exception as e:
+        logger.warning(f"Failed to fetch license details for user {user_id} from v1.0 endpoint: {str(e)}")
+        return []
+
+
+def fetch_beta_users_with_licenses(tenant_id):
+    """Fetch users with license assignments from beta endpoint"""
+    try:
+        graph = GraphBetaClient(tenant_id)
+        all_users = graph.get(
+            "/users",
+            select=[
+                "id",
+                "userPrincipalName",
+                "assignedLicenses",
+                "displayName",
+                "accountEnabled",
+            ],
+            top=999,
+        )
+        return all_users
+    except Exception as e:
+        logger.warning(f"Failed to fetch users with licenses from beta endpoint: {str(e)}")
+        return []
+
+
+def fetch_v1_users_with_licenses(tenant_id):
+    """Fetch users with license assignments from v1.0 endpoint"""
+    try:
+        graph = GraphClient(tenant_id)
+        all_users = graph.get(
+            "/users",
+            select=[
+                "id",
+                "userPrincipalName",
+                "assignedLicenses",
+                "displayName",
+                "accountEnabled",
+            ],
+            top=999,
+        )
+        return all_users
+    except Exception as e:
+        logger.warning(f"Failed to fetch users with licenses from v1.0 endpoint: {str(e)}")
         return []
 
 
@@ -81,39 +158,39 @@ def estimate_license_cost(sku_part_number: str) -> float:
     return 15.00  # Default estimate
 
 
-def get_sku_display_name(sku_part_number: str) -> str:
-    """Get friendly display name for SKU"""
-    sku_names = {
-        "ENTERPRISEPACK": "Office 365 E3",
-        "ENTERPRISEPREMIUM": "Office 365 E5",
-        "EXCHANGESTANDARD": "Exchange Online Plan 1",
-        "EXCHANGEENTERPRISE": "Exchange Online Plan 2",
-        "SPB": "Microsoft 365 Business Standard",
-        "SMB_BUSINESS_ESSENTIALS": "Microsoft 365 Business Basic",
-        "SMB_BUSINESS_PREMIUM": "Microsoft 365 Business Premium",
-        "STANDARDWOFFPACK": "Office 365 E1",
-        "POWER_BI_PRO": "Power BI Pro",
-        "EMS": "Enterprise Mobility + Security E3",
-        "EMSPREMIUM": "Enterprise Mobility + Security E5",
-        "VISIOCLIENT": "Visio Online Plan 2",
-        "PROJECTPREMIUM": "Project Online Premium",
-        "TEAMS_EXPLORATORY": "Teams Exploratory",
-        "FLOW_FREE": "Power Automate Free",
-        "WINDOWS_STORE": "Windows Store for Business",
-        "DEVELOPERPACK": "Office 365 E3 Developer",
-        "STREAM": "Microsoft Stream",
-    }
+def get_sku_display_name(sku_part_number: str, license_id: str) -> str:
+    """Get friendly display name for SKU using CSV data based on SKU part number and license ID"""
+    try:
+        # Path to the CSV file
+        csv_path = os.path.join(os.path.dirname(__file__), "..", "sql", "data", "product-plan-names.csv")
 
-    if not sku_part_number:
-        return "Unknown License"
+        if not os.path.exists(csv_path):
+            logger.warning(f"CSV file not found at {csv_path}, falling back to SKU part number")
+            return sku_part_number if sku_part_number else "Unknown License"
 
-    sku_upper = sku_part_number.upper()
-    for sku_pattern, display_name in sku_names.items():
-        if sku_pattern in sku_upper:
-            return display_name
+        # Read CSV and look for matching SKU part number and license ID
+        with open(csv_path, encoding="utf-8") as csvfile:
+            csv_reader = csv.DictReader(csvfile)
 
-    # Return the SKU part number if no friendly name found
-    return sku_part_number
+            for row in csv_reader:
+                # Check if both String_Id (SKU part number) and GUID (license ID) match
+                if row.get("String_Id", "").upper() == sku_part_number.upper() and row.get("GUID", "").lower() == license_id.lower():
+                    return row.get("Product_Display_Name", sku_part_number)
+
+            # If no exact match found, try to find by SKU part number only
+            csvfile.seek(0)  # Reset file pointer
+            next(csv_reader)  # Skip header row
+
+            for row in csv_reader:
+                if row.get("String_Id", "").upper() == sku_part_number.upper():
+                    return row.get("Product_Display_Name", sku_part_number)
+
+        # If no match found in CSV, return the SKU part number
+        return sku_part_number if sku_part_number else "Unknown License"
+
+    except Exception as e:
+        logger.warning(f"Error reading CSV file for SKU lookup: {str(e)}, falling back to SKU part number")
+        return sku_part_number if sku_part_number else "Unknown License"
 
 
 def sync_licenses_v2(tenant_id, tenant_name):
@@ -125,8 +202,38 @@ def sync_licenses_v2(tenant_id, tenant_name):
     try:
         logger.info(f"Starting license sync for {tenant_name}")
 
-        # First, try to fetch tenant licenses
-        tenant_licenses = fetch_tenant_licenses(tenant_id)
+        # First, detect tenant capability by attempting to fetch signin activity
+        # This determines if the tenant is premium and can access advanced features
+        try:
+            graph = GraphBetaClient(tenant_id)
+            test_user = graph.get("/users", select=["id", "userPrincipalName"], top=1)
+
+            if test_user:
+                # Try to fetch signin activity for the first user to test premium capabilities
+                try:
+                    user_id = test_user[0]["id"]
+                    signin_activity = graph.get(f"/users/{user_id}/signInActivity")
+                    is_premium = True
+                    logger.info(f"Tenant {tenant_id} is premium - using beta endpoint")
+                except Exception:
+                    # Signin activity not accessible, tenant is not premium
+                    is_premium = False
+                    logger.info(f"Tenant {tenant_id} is not premium - using v1.0 endpoint")
+            else:
+                logger.warning(f"No users found in tenant {tenant_id} for capability testing")
+                is_premium = False
+
+        except Exception as capability_error:
+            logger.warning(f"Could not determine tenant capability for {tenant_id}: {str(capability_error)}")
+            is_premium = False
+
+        # Now fetch tenant licenses using the appropriate endpoint based on tenant capability
+        if is_premium:
+            # Premium tenant - use beta endpoint for advanced features
+            tenant_licenses = fetch_beta_tenant_licenses(tenant_id)
+        else:
+            # Non-premium tenant - use v1.0 endpoint for basic features
+            tenant_licenses = fetch_v1_tenant_licenses(tenant_id)
 
         # Create lookup dictionary for tenant licenses
         license_lookup = {}
@@ -141,7 +248,7 @@ def sync_licenses_v2(tenant_id, tenant_name):
                 license_data = {
                     "tenant_id": tenant_id,
                     "license_id": lic.get("skuId"),
-                    "license_display_name": get_sku_display_name(sku_part_number),
+                    "license_display_name": get_sku_display_name(sku_part_number, lic.get("skuId")),
                     "license_partnumber": sku_part_number,
                     "status": "active" if lic.get("capabilityStatus") == "Enabled" else "inactive",
                     "total_count": total_units,
@@ -159,22 +266,15 @@ def sync_licenses_v2(tenant_id, tenant_name):
                 upsert_many("licenses", license_records)
                 logger.info(f"Stored {len(license_records)} tenant licenses")
 
-        # Fetch ALL users with licenses (not just active ones)
+        # Fetch ALL users with licenses using the appropriate endpoint based on tenant capability
         logger.info(f"Fetching user license assignments for {tenant_id}")
-        graph = GraphBetaClient(tenant_id)
 
-        # Get all users, not filtered - include accountEnabled to detect inactive users
-        all_users = graph.get(
-            "/users",
-            select=[
-                "id",
-                "userPrincipalName",
-                "assignedLicenses",
-                "displayName",
-                "accountEnabled",
-            ],
-            top=999,
-        )
+        if is_premium:
+            # Premium tenant - use beta endpoint for advanced features
+            all_users = fetch_beta_users_with_licenses(tenant_id)
+        else:
+            # Non-premium tenant - use v1.0 endpoint for basic features
+            all_users = fetch_v1_users_with_licenses(tenant_id)
 
         user_license_records = []
         users_with_licenses = 0
@@ -189,8 +289,11 @@ def sync_licenses_v2(tenant_id, tenant_name):
             if assigned_licenses:
                 users_with_licenses += 1
 
-                # Get detailed license info for this user
-                detailed_licenses = fetch_user_license_details(tenant_id, user_id)
+                # Get detailed license info for this user using the appropriate endpoint
+                if is_premium:
+                    detailed_licenses = fetch_beta_user_license_details(tenant_id, user_id)
+                else:
+                    detailed_licenses = fetch_v1_user_license_details(tenant_id, user_id)
                 license_detail_lookup = {lic["skuId"]: lic for lic in detailed_licenses}
 
                 for assigned_license in assigned_licenses:
@@ -248,7 +351,7 @@ def sync_licenses_v2(tenant_id, tenant_name):
                         "user_principal_name": upn,
                         "is_active": is_license_active,
                         "unassigned_date": None,
-                        "license_display_name": get_sku_display_name(sku_part_number),
+                        "license_display_name": get_sku_display_name(sku_part_number, sku_id),
                         "license_partnumber": sku_part_number,
                         "monthly_cost": estimate_license_cost(sku_part_number),
                         "created_at": datetime.now().isoformat(),

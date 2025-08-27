@@ -3,14 +3,21 @@ from datetime import datetime
 import logging
 
 from core.graph_beta_client import GraphBetaClient
+from core.graph_client import GraphClient
 from sql.databaseV2 import init_schema, upsert_many
 from utils.http import clean_error_message
 
 
 logger = logging.getLogger(__name__)
 
+# if v1.0 is detected, we set premium specific attributes to nulls or none for v1.0 endpoints
+# be careful, bc v1.0 might give diff. resp. struct. compared to beta, so we need to handle that
+"""before fetching users, deter. if user is premium or not
+and to deter. we use a simple fetch funct. where we fetch a single user from v1.0 endpoint and selecting for the signin activity
+if error comes from query^, then they are not premium, and can only access v1.0 endpoints"""
 
-def fetch_users(tenant_id):
+
+def fetch_beta_users(tenant_id):
     """Fetch users from Graph API"""
     try:
         logger.info(f"Starting user fetch for tenant {tenant_id}")
@@ -44,6 +51,81 @@ def fetch_users(tenant_id):
     except Exception as e:
         # Use helper function for clean error messages
         error_msg = clean_error_message(str(e), "Failed to fetch users")
+        logger.error(error_msg)
+        # Log full error details at debug level for troubleshooting
+        logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
+        raise
+
+
+def fetch_v1_users(tenant_id):
+    """Fetch users from Graph API v1.0 endpoint with tenant capability detection"""
+    try:
+        logger.info(f"Starting user fetch for tenant {tenant_id} using v1.0 endpoint")
+        graph = GraphClient(tenant_id)
+
+        # First, test tenant capability by attempting to fetch signin activity
+        # This determines if the tenant is premium and can access advanced features
+        try:
+            # Test with a single user to check if signin activity is accessible
+            test_user = graph.get("/users", select=["id", "userPrincipalName"], top=1)
+
+            if test_user:
+                # Try to fetch signin activity for the first user to test premium capabilities
+                user_id = test_user[0]["id"]
+                try:
+                    signin_activity = graph.get(f"/users/{user_id}/signInActivity", select=["lastSignInDateTime", "lastSignInRequestId"])
+                    # If this succeeds, tenant is premium
+                    logger.info(f"Tenant {tenant_id} is PREMIUM - signin activity accessible")
+                    is_premium = True
+                except Exception as signin_error:
+                    # If signin activity fails, tenant is not premium
+                    logger.info(f"Tenant {tenant_id} is NOT PREMIUM - signin activity not accessible: {str(signin_error)}")
+                    is_premium = False
+            else:
+                logger.warning(f"No users found in tenant {tenant_id} for capability testing")
+                is_premium = False
+
+        except Exception as capability_error:
+            logger.warning(f"Could not determine tenant capability for {tenant_id}: {str(capability_error)}")
+            is_premium = False
+
+        # Now fetch all users with appropriate attributes based on capability
+        if is_premium:
+            # Premium tenant - can access advanced attributes
+            users = graph.get(
+                "/users",
+                select=[
+                    "id",
+                    "displayName",
+                    "userPrincipalName",
+                    "mail",
+                    "accountEnabled",
+                    "givenName",
+                    "surname",
+                    "jobTitle",
+                    "department",
+                    "officeLocation",
+                    "businessPhones",
+                    "mobilePhone",
+                    "preferredLanguage",
+                    "usageLocation",
+                ],
+            )
+        else:
+            # Non-premium tenant - limited to basic v1.0 attributes
+            users = graph.get("/users", select=["id", "displayName", "userPrincipalName", "mail", "accountEnabled"])
+
+        logger.info(f"Successfully fetched {len(users)} users from v1.0 endpoint for tenant {tenant_id}")
+
+        # Add capability flag to each user record for downstream processing
+        for user in users:
+            user["_tenant_premium"] = is_premium
+
+        return users, is_premium
+
+    except Exception as e:
+        # Use helper function for clean error messages
+        error_msg = clean_error_message(str(e), "Failed to fetch users from v1.0 endpoint")
         logger.error(error_msg)
         # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
@@ -245,8 +327,41 @@ def sync_users(tenant_id, tenant_name):
     init_schema()
 
     try:
+        # check if tenant is premium
+        # if premium, use beta client, else use v1.0 client
         # fetch all data
-        users = fetch_users(tenant_id)
+        try:
+            # First, test tenant capability by attempting to fetch signin activity
+            # This determines if the tenant is premium and can access advanced features
+            graph = GraphBetaClient(tenant_id)
+            test_user = graph.get("/users", select=["id", "userPrincipalName"], top=1)
+
+            if test_user:
+                # Try to fetch signin activity for the first user to test premium capabilities
+                try:
+                    user_id = test_user[0]["id"]
+                    signin_activity = graph.get(f"/users/{user_id}/signInActivity")
+                    is_premium = True
+                    logger.info(f"Tenant {tenant_id} is premium - using beta endpoint")
+                except Exception:
+                    # Signin activity not accessible, tenant is not premium
+                    is_premium = False
+                    logger.info(f"Tenant {tenant_id} is not premium - using v1.0 endpoint")
+            else:
+                logger.warning(f"No users found in tenant {tenant_id} for capability testing")
+                is_premium = False
+
+        except Exception as capability_error:
+            logger.warning(f"Could not determine tenant capability for {tenant_id}: {str(capability_error)}")
+            is_premium = False
+
+        # Now fetch users using the appropriate endpoint based on tenant capability
+        if is_premium:
+            # Premium tenant - use beta endpoint for advanced features
+            users = fetch_beta_users(tenant_id)
+        else:
+            # Non-premium tenant - use v1.0 endpoint for basic features
+            users, _ = fetch_v1_users(tenant_id)
 
         if not users:
             logger.warning(f"No users found for {tenant_name}")

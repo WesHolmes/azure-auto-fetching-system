@@ -2,6 +2,7 @@ from datetime import datetime
 import logging
 
 from core.graph_beta_client import GraphBetaClient
+from core.graph_client import GraphClient
 from sql.databaseV2 import init_schema, upsert_many
 from utils.http import clean_error_message
 
@@ -9,7 +10,7 @@ from utils.http import clean_error_message
 logger = logging.getLogger(__name__)
 
 
-def fetch_tenant_groups(tenant_id):
+def fetch_beta_tenant_groups(tenant_id):
     """Fetch tenant-level group information"""
     try:
         logger.info(f"Fetching tenant groups for {tenant_id}")
@@ -49,7 +50,39 @@ def fetch_tenant_groups(tenant_id):
         return []
 
 
-def fetch_group_members(tenant_id, group_id):
+def fetch_v1_tenant_groups(tenant_id):
+    """Fetch tenant-level group information from v1.0 endpoint"""
+    try:
+        logger.info(f"Fetching tenant groups for {tenant_id} using v1.0 endpoint")
+        graph = GraphClient(tenant_id)
+
+        # Get all groups with basic information from v1.0 endpoint
+        groups = graph.get(
+            "/groups",
+            select=[
+                "id",
+                "displayName",
+                "description",
+                "groupTypes",
+                "mailEnabled",
+                "securityEnabled",
+                "mailNickname",
+                "visibility",
+            ],
+            top=999,
+        )
+
+        logger.info(f"Successfully fetched {len(groups) if groups else 0} groups from v1.0 endpoint for tenant {tenant_id}")
+        return groups
+
+    except Exception as e:
+        error_msg = clean_error_message(str(e), "Failed to fetch groups from v1.0 endpoint")
+        logger.error(error_msg)
+        logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
+        return []
+
+
+def fetch_beta_group_members(tenant_id, group_id):
     """Fetch detailed member information for a specific group"""
     try:
         # logger.info(f"Fetching members for group {group_id}")
@@ -62,7 +95,20 @@ def fetch_group_members(tenant_id, group_id):
         return []
 
 
-def fetch_group_owners(tenant_id, group_id):
+def fetch_v1_group_members(tenant_id, group_id):
+    """Fetch detailed member information for a specific group from v1.0 endpoint"""
+    try:
+        # logger.info(f"Fetching members for group {group_id} from v1.0 endpoint")
+        graph = GraphClient(tenant_id)
+        members = graph.get(f"/groups/{group_id}/members", select=["id", "userPrincipalName", "displayName"])
+        # logger.info(f"Group {group_id}: Found {len(members) if members else 0} members from v1.0 endpoint")
+        return members
+    except Exception as e:
+        logger.warning(f"Failed to fetch members for group {group_id} from v1.0 endpoint: {str(e)}")
+        return []
+
+
+def fetch_beta_group_owners(tenant_id, group_id):
     """Fetch detailed owner information for a specific group"""
     try:
         # logger.info(f"Fetching owners for group {group_id}")
@@ -72,6 +118,19 @@ def fetch_group_owners(tenant_id, group_id):
         return owners
     except Exception as e:
         logger.warning(f"Failed to fetch owners for group {group_id}: {str(e)}")
+        return []
+
+
+def fetch_v1_group_owners(tenant_id, group_id):
+    """Fetch detailed owner information for a specific group from v1.0 endpoint"""
+    try:
+        # logger.info(f"Fetching owners for group {group_id} from v1.0 endpoint")
+        graph = GraphClient(tenant_id)
+        owners = graph.get(f"/groups/{group_id}/owners", select=["id", "userPrincipalName", "displayName"])
+        # logger.info(f"Group {group_id}: Found {len(owners) if owners else 0} owners from v1.0 endpoint")
+        return owners
+    except Exception as e:
+        logger.warning(f"Failed to fetch owners for group {group_id} from v1.0 endpoint: {str(e)}")
         return []
 
 
@@ -94,7 +153,7 @@ def determine_group_type(group_types):
         return "Security"
 
 
-def transform_group_data(groups, tenant_id):
+def transform_group_data(groups, tenant_id, is_premium=False):
     """Transform group data for database storage"""
     try:
         logger.info(f"Transforming {len(groups)} groups for tenant {tenant_id}")
@@ -106,9 +165,13 @@ def transform_group_data(groups, tenant_id):
             group_types = group.get("groupTypes", [])
             group_type = determine_group_type(group_types)
 
-            # Fetch members and owners for this group
-            members = fetch_group_members(tenant_id, group.get("id"))
-            owners = fetch_group_owners(tenant_id, group.get("id"))
+            # Fetch members and owners for this group using the appropriate endpoint
+            if is_premium:
+                members = fetch_beta_group_members(tenant_id, group.get("id"))
+                owners = fetch_beta_group_owners(tenant_id, group.get("id"))
+            else:
+                members = fetch_v1_group_members(tenant_id, group.get("id"))
+                owners = fetch_v1_group_owners(tenant_id, group.get("id"))
 
             # Count user members and owners (users have userPrincipalName, service principals don't)
             user_members = [m for m in members if m.get("userPrincipalName")]
@@ -209,8 +272,39 @@ def sync_groups(tenant_id, tenant_name):
         logger.info(f"Starting group sync for {tenant_name}")
         start_time = datetime.now()
 
-        # Fetch tenant groups
-        groups = fetch_tenant_groups(tenant_id)
+        # First, detect tenant capability by attempting to fetch signin activity
+        # This determines if the tenant is premium and can access advanced features
+        try:
+            graph = GraphBetaClient(tenant_id)
+            test_user = graph.get("/users", select=["id", "userPrincipalName"], top=1)
+
+            if test_user:
+                # Try to fetch signin activity for the first user to test premium capabilities
+                try:
+                    user_id = test_user[0]["id"]
+                    signin_activity = graph.get(f"/users/{user_id}/signInActivity")
+                    is_premium = True
+                    logger.info(f"Tenant {tenant_id} is premium - using beta endpoint")
+                except Exception:
+                    # Signin activity not accessible, tenant is not premium
+                    is_premium = False
+                    logger.info(f"Tenant {tenant_id} is not premium - using v1.0 endpoint")
+            else:
+                logger.warning(f"No users found in tenant {tenant_id} for capability testing")
+                is_premium = False
+
+        except Exception as capability_error:
+            logger.warning(f"Could not determine tenant capability for {tenant_id}: {str(capability_error)}")
+            is_premium = False
+
+        # Now fetch tenant groups using the appropriate endpoint based on tenant capability
+        if is_premium:
+            # Premium tenant - use beta endpoint for advanced features
+            groups = fetch_beta_tenant_groups(tenant_id)
+        else:
+            # Non-premium tenant - use v1.0 endpoint for basic features
+            groups = fetch_v1_tenant_groups(tenant_id)
+
         if not groups:
             logger.warning(f"No groups found for tenant {tenant_id}")
             return {
@@ -222,8 +316,8 @@ def sync_groups(tenant_id, tenant_name):
                 "duration_seconds": (datetime.now() - start_time).total_seconds(),
             }
 
-        # Transform and get group data
-        group_records, user_group_records = transform_group_data(groups, tenant_id)
+        # Transform and get group data using the appropriate endpoint based on tenant capability
+        group_records, user_group_records = transform_group_data(groups, tenant_id, is_premium)
 
         # Store in database
         from sql.databaseV2 import get_connection

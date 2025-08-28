@@ -57,42 +57,53 @@ def fetch_beta_users(tenant_id):
         raise
 
 
+def _test_tenant_capability(graph, graph_beta, tenant_id):
+    """Helper function to test tenant capability for premium features"""
+    try:
+        # Test with a single user to check if signin activity is accessible
+        test_user = graph.get("/users", select=["id", "userPrincipalName"], top=1)
+        if not test_user:
+            logger.warning(f"No users found in tenant {tenant_id} for capability testing")
+            return False
+
+        # Try to fetch signin activity for the first user (BETA endpoint)
+        user_id = test_user[0]["id"]
+        try:
+            graph_beta.get(f"/users/{user_id}/signInActivity", select=["lastSignInDateTime"])
+            logger.info(f"Tenant {tenant_id} is PREMIUM - signin activity accessible")
+            return True
+        except Exception:
+            # Fallback: test v1.0 premium features
+            try:
+                premium_test = graph.get("/users", select=["id", "department", "jobTitle", "officeLocation"], top=1)
+                if premium_test and any(premium_test[0].get(field) for field in ["department", "jobTitle", "officeLocation"]):
+                    logger.info(f"Tenant {tenant_id} is PREMIUM - v1.0 premium features accessible")
+                    return True
+                else:
+                    logger.info(f"Tenant {tenant_id} is NOT PREMIUM - no premium features accessible")
+                    return False
+            except Exception:
+                logger.info(f"Tenant {tenant_id} is NOT PREMIUM - v1.0 premium features not accessible")
+                return False
+    except Exception as capability_error:
+        logger.warning(f"Could not determine tenant capability for {tenant_id}: {str(capability_error)}")
+        return False
+
+
 def fetch_v1_users(tenant_id):
     """Fetch users from Graph API v1.0 endpoint with tenant capability detection"""
     try:
         logger.info(f"Starting user fetch for tenant {tenant_id} using v1.0 endpoint")
         graph = GraphClient(tenant_id)
+        graph_beta = GraphBetaClient(tenant_id)
 
-        # First, test tenant capability by attempting to fetch signin activity
-        # This determines if the tenant is premium and can access advanced features
-        try:
-            # Test with a single user to check if signin activity is accessible
-            test_user = graph.get("/users", select=["id", "userPrincipalName"], top=1)
+        # Test tenant capability
+        is_premium = _test_tenant_capability(graph, graph_beta, tenant_id)
 
-            if test_user:
-                # Try to fetch signin activity for the first user to test premium capabilities
-                user_id = test_user[0]["id"]
-                try:
-                    signin_activity = graph.get(f"/users/{user_id}/signInActivity", select=["lastSignInDateTime", "lastSignInRequestId"])
-                    # If this succeeds, tenant is premium
-                    logger.info(f"Tenant {tenant_id} is PREMIUM - signin activity accessible")
-                    is_premium = True
-                except Exception as signin_error:
-                    # If signin activity fails, tenant is not premium
-                    logger.info(f"Tenant {tenant_id} is NOT PREMIUM - signin activity not accessible: {str(signin_error)}")
-                    is_premium = False
-            else:
-                logger.warning(f"No users found in tenant {tenant_id} for capability testing")
-                is_premium = False
-
-        except Exception as capability_error:
-            logger.warning(f"Could not determine tenant capability for {tenant_id}: {str(capability_error)}")
-            is_premium = False
-
-        # Now fetch all users with appropriate attributes based on capability
+        # Fetch users with appropriate attributes based on capability
         if is_premium:
-            # Premium tenant - can access advanced attributes
-            users = graph.get(
+            # Premium tenant - can access advanced attributes (including beta features)
+            users = graph_beta.get(
                 "/users",
                 select=[
                     "id",
@@ -109,6 +120,10 @@ def fetch_v1_users(tenant_id):
                     "mobilePhone",
                     "preferredLanguage",
                     "usageLocation",
+                    "signInActivity",
+                    "createdDateTime",
+                    "assignedLicenses",
+                    "lastPasswordChangeDateTime",
                 ],
             )
         else:
@@ -124,10 +139,8 @@ def fetch_v1_users(tenant_id):
         return users, is_premium
 
     except Exception as e:
-        # Use helper function for clean error messages
         error_msg = clean_error_message(str(e), "Failed to fetch users from v1.0 endpoint")
         logger.error(error_msg)
-        # Log full error details at debug level for troubleshooting
         logger.debug(f"Full error details for tenant {tenant_id}: {str(e)}", exc_info=True)
         raise
 
@@ -206,12 +219,12 @@ def fetch_user_groups_batch(tenant_id, user_ids):
     return results
 
 
-def transform_user_records(users, tenant_id, mfa_lookup):
+def transform_user_records(users, tenant_id, mfa_lookup, is_premium=True):
     """Transform Graph API users to database records"""
     records = []
     start_time = datetime.now()
 
-    logger.info(f"Starting transformation of {len(users)} users")
+    logger.info(f"Starting transformation of {len(users)} users for {'premium' if is_premium else 'non-premium'} tenant")
 
     # First, collect all user IDs that need group fetching
     user_ids = [user.get("id") for user in users]
@@ -234,18 +247,33 @@ def transform_user_records(users, tenant_id, mfa_lookup):
             logger.info(f"Processing user {i}/{len(users)} - Elapsed: {elapsed:.1f}s, ETA: {eta:.1f}s")
 
         try:
-            # Get last sign-in
-            signin_activity = user.get("signInActivity", {})
-            last_sign_in = signin_activity.get("lastSignInDateTime", None)
+            # Get last sign-in based on tenant premium status
+            if is_premium:
+                # Premium tenant - use actual signin data
+                signin_activity = user.get("signInActivity", {})
+                last_sign_in = signin_activity.get("lastSignInDateTime", None)
+
+                # If no signin activity date, set to default (1900-01-01)
+                if last_sign_in is None:
+                    last_sign_in = "1900-01-01"
+            else:
+                # Non-premium tenant - set to NULL (no access to signin data)
+                last_sign_in = None
 
             # get license count
             assigned_licenses = user.get("assignedLicenses", [])
             license_count = len(assigned_licenses)
             is_active_license = 1 if account_enabled else 0
 
-            # get mfa details
-            mfa_data = mfa_lookup.get(user_id, {})
-            is_mfa_registered = mfa_data.get("isMfaRegistered", False)
+            # get mfa details based on tenant premium status
+            if is_premium:
+                # Premium tenant - use actual MFA data
+                mfa_data = mfa_lookup.get(user_id, {})
+                is_mfa_registered = mfa_data.get("isMfaRegistered", False)
+                is_mfa_compliant = 1 if is_mfa_registered else 0
+            else:
+                # Non-premium tenant - set MFA compliance to NULL (no access to MFA data)
+                is_mfa_compliant = None
 
             # Get group count and admin status from pre-fetched results
             is_admin, group_count = group_results.get(user_id, (False, 0))
@@ -262,20 +290,36 @@ def transform_user_records(users, tenant_id, mfa_lookup):
             # Get created date
             created_at = user.get("createdDateTime") or datetime.now().isoformat()
 
+            # Handle premium-specific properties with appropriate defaults
+            if is_premium:
+                # Premium tenant - use actual data or set appropriate defaults
+                department = user.get("department") or "Unassigned"
+                job_title = user.get("jobTitle") or "Not Specified"
+                office_location = user.get("officeLocation") or "Remote"
+                mobile_phone = user.get("mobilePhone") or "Not Provided"
+                account_type = user.get("userType") or "Member"
+            else:
+                # Non-premium tenant - set to NULL (no access to these properties)
+                department = None
+                job_title = None
+                office_location = None
+                mobile_phone = None
+                account_type = None
+
             record = {
                 "user_id": user_id,
                 "tenant_id": tenant_id,
                 "user_principal_name": upn,
                 "primary_email": primary_email,
                 "display_name": display_name,
-                "department": user.get("department"),
-                "job_title": user.get("jobTitle"),
-                "office_location": user.get("officeLocation"),
-                "mobile_phone": user.get("mobilePhone"),
-                "account_type": user.get("userType"),
+                "department": department,
+                "job_title": job_title,
+                "office_location": office_location,
+                "mobile_phone": mobile_phone,
+                "account_type": account_type,
                 "account_enabled": 1 if user.get("accountEnabled") else 0,
                 "is_global_admin": 1 if is_admin else 0,
-                "is_mfa_compliant": 1 if is_mfa_registered else 0,
+                "is_mfa_compliant": is_mfa_compliant,  # Now uses the variable that can be NULL for non-premium
                 "license_count": license_count,
                 "group_count": group_count,
                 "last_sign_in_date": last_sign_in,
@@ -291,23 +335,39 @@ def transform_user_records(users, tenant_id, mfa_lookup):
             primary_email = user.get("mail") or upn or "unknown@domain.com"
             created_at = user.get("createdDateTime") or datetime.now().isoformat()
 
+            # Handle premium-specific properties for basic record (same logic as main record)
+            if is_premium:
+                # Premium tenant - use actual data or set appropriate defaults
+                department = user.get("department") or "Unassigned"
+                job_title = user.get("jobTitle") or "Not Specified"
+                office_location = user.get("officeLocation") or "Remote"
+                mobile_phone = user.get("mobilePhone") or "Not Provided"
+                account_type = user.get("userType") or "Member"
+            else:
+                # Non-premium tenant - set to NULL (no access to these properties)
+                department = None
+                job_title = None
+                office_location = None
+                mobile_phone = None
+                account_type = None
+
             basic_record = {
                 "user_id": user_id,
                 "tenant_id": tenant_id,
                 "user_principal_name": upn,
                 "primary_email": primary_email,
                 "display_name": display_name,
-                "department": user.get("department"),
-                "job_title": user.get("jobTitle"),
-                "office_location": user.get("officeLocation"),
-                "mobile_phone": user.get("mobilePhone"),
-                "account_type": user.get("userType"),
+                "department": department,
+                "job_title": job_title,
+                "office_location": office_location,
+                "mobile_phone": mobile_phone,
+                "account_type": account_type,
                 "account_enabled": 1 if user.get("accountEnabled") else 0,
                 "is_global_admin": 0,
-                "is_mfa_compliant": 0,
+                "is_mfa_compliant": None if not is_premium else 0,  # NULL for non-premium, 0 for premium with error
                 "license_count": 0,
                 "group_count": 0,
-                "last_sign_in_date": None,
+                "last_sign_in_date": None if not is_premium else "1900-01-01",  # NULL for non-premium, default for premium with error
                 "last_password_change": user.get("lastPasswordChangeDateTime"),
                 "created_at": created_at,
                 "last_updated": datetime.now().isoformat(),
@@ -327,41 +387,25 @@ def sync_users(tenant_id, tenant_name):
     init_schema()
 
     try:
-        # check if tenant is premium
-        # if premium, use beta client, else use v1.0 client
-        # fetch all data
+        # Use the template pattern: fetch users and determine tenant capability in one call
+        # fetch_v1_users handles tenant capability detection and returns both users and is_premium flag
         try:
-            # First, test tenant capability by attempting to fetch signin activity
-            # This determines if the tenant is premium and can access advanced features
-            graph = GraphBetaClient(tenant_id)
-            test_user = graph.get("/users", select=["id", "userPrincipalName"], top=1)
+            users, is_premium = fetch_v1_users(tenant_id)
 
-            if test_user:
-                # Try to fetch signin activity for the first user to test premium capabilities
-                try:
-                    user_id = test_user[0]["id"]
-                    signin_activity = graph.get(f"/users/{user_id}/signInActivity")
-                    is_premium = True
-                    logger.info(f"Tenant {tenant_id} is premium - using beta endpoint")
-                except Exception:
-                    # Signin activity not accessible, tenant is not premium
-                    is_premium = False
-                    logger.info(f"Tenant {tenant_id} is not premium - using v1.0 endpoint")
+            # Now fetch MFA status based on tenant capability
+            if is_premium:
+                # Premium tenant - fetch MFA data
+                mfa_lookup = fetch_user_mfa_status(tenant_id)
             else:
-                logger.warning(f"No users found in tenant {tenant_id} for capability testing")
-                is_premium = False
+                # Non-premium tenant - skip MFA fetch (no access to MFA data)
+                mfa_lookup = {}
 
-        except Exception as capability_error:
-            logger.warning(f"Could not determine tenant capability for {tenant_id}: {str(capability_error)}")
+        except Exception as e:
+            logger.error(f"Failed to check tenant capability for {tenant_name}: {str(e)}", exc_info=True)
+            # Fallback to v1.0 workflow - assume non-premium
             is_premium = False
-
-        # Now fetch users using the appropriate endpoint based on tenant capability
-        if is_premium:
-            # Premium tenant - use beta endpoint for advanced features
-            users = fetch_beta_users(tenant_id)
-        else:
-            # Non-premium tenant - use v1.0 endpoint for basic features
             users, _ = fetch_v1_users(tenant_id)
+            mfa_lookup = {}
 
         if not users:
             logger.warning(f"No users found for {tenant_name}")
@@ -373,11 +417,8 @@ def sync_users(tenant_id, tenant_name):
                 "duration_seconds": (datetime.now() - start_time).total_seconds(),
             }
 
-        # fetch MFA status (optional enrichment)
-        mfa_lookup = fetch_user_mfa_status(tenant_id)
-
-        # transform data
-        user_records = transform_user_records(users, tenant_id, mfa_lookup)
+        # transform data with premium status flag
+        user_records = transform_user_records(users, tenant_id, mfa_lookup, is_premium)
 
         # store in database with error handling
         users_stored = 0

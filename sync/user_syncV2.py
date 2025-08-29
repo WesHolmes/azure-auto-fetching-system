@@ -70,20 +70,17 @@ def _test_tenant_capability(graph, graph_beta, tenant_id):
         user_id = test_user[0]["id"]
         try:
             graph_beta.get(f"/users/{user_id}/signInActivity", select=["lastSignInDateTime"])
-            logger.info(f"Tenant {tenant_id} is PREMIUM - signin activity accessible")
+            logger.info(f"Tenant {tenant_id} is PREMIUM - beta signin activity accessible")
             return True
         except Exception:
-            # Fallback: test v1.0 premium features
+            # Fallback: test if we can access beta MFA data (another beta-only feature)
             try:
-                premium_test = graph.get("/users", select=["id", "department", "jobTitle", "officeLocation"], top=1)
-                if premium_test and any(premium_test[0].get(field) for field in ["department", "jobTitle", "officeLocation"]):
-                    logger.info(f"Tenant {tenant_id} is PREMIUM - v1.0 premium features accessible")
-                    return True
-                else:
-                    logger.info(f"Tenant {tenant_id} is NOT PREMIUM - no premium features accessible")
-                    return False
+                # Test if we can access MFA registration details (beta endpoint)
+                graph_beta.get("/reports/authenticationMethods/userRegistrationDetails", select=["id"], top=1)
+                logger.info(f"Tenant {tenant_id} is PREMIUM - beta MFA data accessible")
+                return True
             except Exception:
-                logger.info(f"Tenant {tenant_id} is NOT PREMIUM - v1.0 premium features not accessible")
+                logger.info(f"Tenant {tenant_id} is NOT PREMIUM - no beta features accessible")
                 return False
     except Exception as capability_error:
         logger.warning(f"Could not determine tenant capability for {tenant_id}: {str(capability_error)}")
@@ -127,8 +124,26 @@ def fetch_v1_users(tenant_id):
                 ],
             )
         else:
-            # Non-premium tenant - limited to basic v1.0 attributes
-            users = graph.get("/users", select=["id", "displayName", "userPrincipalName", "mail", "accountEnabled"])
+            # Non-premium tenant - can still access v1.0 properties like department, jobTitle, etc.
+            # Only MFA and signin activity are restricted (beta-only features)
+            users = graph.get(
+                "/users",
+                select=[
+                    "id",
+                    "displayName",
+                    "userPrincipalName",
+                    "mail",
+                    "accountEnabled",
+                    "jobTitle",
+                    "department",
+                    "officeLocation",
+                    "mobilePhone",
+                    "userType",
+                    "createdDateTime",
+                    "assignedLicenses",
+                    "lastPasswordChangeDateTime",
+                ],
+            )
 
         logger.info(f"Successfully fetched {len(users)} users from v1.0 endpoint for tenant {tenant_id}")
 
@@ -267,12 +282,17 @@ def transform_user_records(users, tenant_id, mfa_lookup, is_premium=True):
 
             # get mfa details based on tenant premium status
             if is_premium:
-                # Premium tenant - use actual MFA data
+                # Premium tenant (beta) - use actual MFA data from beta endpoint
                 mfa_data = mfa_lookup.get(user_id, {})
-                is_mfa_registered = mfa_data.get("isMfaRegistered", False)
-                is_mfa_compliant = 1 if is_mfa_registered else 0
+                if mfa_data:
+                    # We have MFA data from beta endpoint
+                    is_mfa_registered = mfa_data.get("isMfaRegistered", False)
+                    is_mfa_compliant = 1 if is_mfa_registered else 0
+                else:
+                    # No MFA data found for this user, default to 0 (not compliant)
+                    is_mfa_compliant = 0
             else:
-                # Non-premium tenant - set MFA compliance to NULL (no access to MFA data)
+                # Non-premium tenant (v1.0 only) - set MFA compliance to NULL (no access to MFA data)
                 is_mfa_compliant = None
 
             # Get group count and admin status from pre-fetched results
@@ -290,21 +310,13 @@ def transform_user_records(users, tenant_id, mfa_lookup, is_premium=True):
             # Get created date
             created_at = user.get("createdDateTime") or datetime.now().isoformat()
 
-            # Handle premium-specific properties with appropriate defaults
-            if is_premium:
-                # Premium tenant - use actual data or set appropriate defaults
-                department = user.get("department") or "Unassigned"
-                job_title = user.get("jobTitle") or "Not Specified"
-                office_location = user.get("officeLocation") or "Remote"
-                mobile_phone = user.get("mobilePhone") or "Not Provided"
-                account_type = user.get("userType") or "Member"
-            else:
-                # Non-premium tenant - set to NULL (no access to these properties)
-                department = None
-                job_title = None
-                office_location = None
-                mobile_phone = None
-                account_type = None
+            # Handle user properties - both premium and non-premium tenants can access these via v1.0
+            # Only MFA compliance and signin activity are restricted to premium tenants
+            department = user.get("department") or "Unassigned"
+            job_title = user.get("jobTitle") or "Not Specified"
+            office_location = user.get("officeLocation") or "Remote"
+            mobile_phone = user.get("mobilePhone") or "Not Provided"
+            account_type = user.get("userType") or "Member"
 
             record = {
                 "user_id": user_id,
@@ -335,21 +347,12 @@ def transform_user_records(users, tenant_id, mfa_lookup, is_premium=True):
             primary_email = user.get("mail") or upn or "unknown@domain.com"
             created_at = user.get("createdDateTime") or datetime.now().isoformat()
 
-            # Handle premium-specific properties for basic record (same logic as main record)
-            if is_premium:
-                # Premium tenant - use actual data or set appropriate defaults
-                department = user.get("department") or "Unassigned"
-                job_title = user.get("jobTitle") or "Not Specified"
-                office_location = user.get("officeLocation") or "Remote"
-                mobile_phone = user.get("mobilePhone") or "Not Provided"
-                account_type = user.get("userType") or "Member"
-            else:
-                # Non-premium tenant - set to NULL (no access to these properties)
-                department = None
-                job_title = None
-                office_location = None
-                mobile_phone = None
-                account_type = None
+            # Handle user properties for basic record - both premium and non-premium tenants can access these
+            department = user.get("department") or "Unassigned"
+            job_title = user.get("jobTitle") or "Not Specified"
+            office_location = user.get("officeLocation") or "Remote"
+            mobile_phone = user.get("mobilePhone") or "Not Provided"
+            account_type = user.get("userType") or "Member"
 
             basic_record = {
                 "user_id": user_id,
@@ -364,10 +367,10 @@ def transform_user_records(users, tenant_id, mfa_lookup, is_premium=True):
                 "account_type": account_type,
                 "account_enabled": 1 if user.get("accountEnabled") else 0,
                 "is_global_admin": 0,
-                "is_mfa_compliant": None if not is_premium else 0,  # NULL for non-premium, 0 for premium with error
+                "is_mfa_compliant": None if not is_premium else 0,  # NULL for v1.0 tenants, 0 for beta tenants with error
                 "license_count": 0,
                 "group_count": 0,
-                "last_sign_in_date": None if not is_premium else "1900-01-01",  # NULL for non-premium, default for premium with error
+                "last_sign_in_date": None if not is_premium else "1900-01-01",  # NULL for v1.0 tenants, default for beta tenants with error
                 "last_password_change": user.get("lastPasswordChangeDateTime"),
                 "created_at": created_at,
                 "last_updated": datetime.now().isoformat(),

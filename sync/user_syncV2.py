@@ -234,8 +234,9 @@ def fetch_user_groups_batch(tenant_id, user_ids):
     return results
 
 
-def transform_user_records(users, tenant_id, mfa_lookup, is_premium=True):
+def transform_user_records(users, tenant_id, mfa_lookup, is_premium=None):
     """Transform Graph API users to database records"""
+    # is_premium = True
     records = []
     start_time = datetime.now()
 

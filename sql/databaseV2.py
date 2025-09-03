@@ -35,7 +35,7 @@ def init_schema():
                 account_type TEXT(50),
                 account_enabled INTEGER NOT NULL DEFAULT 1,
                 is_global_admin INTEGER NOT NULL DEFAULT 0,
-                is_mfa_compliant INTEGER NOT NULL DEFAULT 0,
+                is_mfa_compliant INTEGER DEFAULT 0,  -- Removed NOT NULL to allow NULL for non-premium tenants
                 license_count INTEGER NOT NULL DEFAULT 0,
                 group_count INTEGER NOT NULL DEFAULT 0,
                 last_sign_in_date TEXT, -- ISO datetime format

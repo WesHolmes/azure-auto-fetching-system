@@ -313,10 +313,10 @@ def transform_user_records(users, tenant_id, mfa_lookup, is_premium=None):
 
             # Handle user properties - both premium and non-premium tenants can access these via v1.0
             # Only MFA compliance and signin activity are restricted to premium tenants
-            department = user.get("department") or "Unassigned"
-            job_title = user.get("jobTitle") or "Not Specified"
-            office_location = user.get("officeLocation") or "Remote"
-            mobile_phone = user.get("mobilePhone") or "Not Provided"
+            department = user.get("department") or "N/A"
+            job_title = user.get("jobTitle") or "N/A"
+            office_location = user.get("officeLocation") or "N/A"
+            mobile_phone = user.get("mobilePhone") or "N/A"
             account_type = user.get("userType") or "Member"
 
             record = {
@@ -349,10 +349,10 @@ def transform_user_records(users, tenant_id, mfa_lookup, is_premium=None):
             created_at = user.get("createdDateTime") or datetime.now().isoformat()
 
             # Handle user properties for basic record - both premium and non-premium tenants can access these
-            department = user.get("department") or "Unassigned"
-            job_title = user.get("jobTitle") or "Not Specified"
-            office_location = user.get("officeLocation") or "Remote"
-            mobile_phone = user.get("mobilePhone") or "Not Provided"
+            department = user.get("department") or "N/A"
+            job_title = user.get("jobTitle") or "N/A"
+            office_location = user.get("officeLocation") or "N/A"
+            mobile_phone = user.get("mobilePhone") or "N/A"
             account_type = user.get("userType") or "Member"
 
             basic_record = {

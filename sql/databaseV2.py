@@ -199,6 +199,12 @@ def init_schema():
                 device_ownership TEXT(50),
                 is_compliant INTEGER DEFAULT 0,
                 is_managed INTEGER DEFAULT 0,
+                manufacturer TEXT(100),
+                total_storage TEXT(50),
+                free_storage TEXT(50),
+                physical_memory TEXT(50),
+                compliance_state TEXT(50),
+                is_encrypted INTEGER DEFAULT 0,
                 last_sign_in_date TEXT, -- ISO datetime format
                 enrolled_date TEXT, -- ISO datetime format
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),

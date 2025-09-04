@@ -9,6 +9,37 @@ from utils.http import clean_error_message
 
 logger = logging.getLogger(__name__)
 
+""" Intune additional $select props: manufacturer, totalStorageSpaceInBytes,
+freeStorageSpaceInBytes, physicalMemoryInBytes, isEncrypted, complianceState"""
+
+
+def format_bytes(bytes_value):
+    """Convert bytes to readable format (B, KB, MB, GB, TB)"""
+    if bytes_value is None or bytes_value == 0:
+        return "N/A"
+
+    try:
+        bytes_value = int(bytes_value)
+        if bytes_value < 0:
+            return "N/A"
+    except (ValueError, TypeError):
+        return "N/A"
+
+    # Define units and their byte values
+    units = [("TB", 1024**4), ("GB", 1024**3), ("MB", 1024**2), ("KB", 1024), ("B", 1)]
+
+    # Find the appropriate unit
+    for unit, size in units:
+        if bytes_value >= size:
+            value = bytes_value / size
+            # Round to 1 decimal place, but show as integer if it's a whole number
+            if value == int(value):
+                return f"{int(value)} {unit}"
+            else:
+                return f"{value:.1f} {unit}"
+
+    return "0 B"
+
 
 def fetch_intune_devices(tenant_id):
     """Fetch Intune managed devices from Graph API Beta endpoint"""
@@ -31,6 +62,11 @@ def fetch_intune_devices(tenant_id):
                 "isEncrypted",
                 "azureADRegistered",
                 "userId",  # Add userId field for user-device relationship
+                "manufacturer",  # Additional Intune fields
+                "totalStorageSpaceInBytes",
+                "freeStorageSpaceInBytes",
+                "physicalMemoryInBytes",
+                "complianceState",
             ],
             top=999,
         )
@@ -60,7 +96,7 @@ def fetch_azure_devices(tenant_id):
                 "isCompliant",
                 "isManaged",
                 "managementType",
-                "manufacturer",
+                "manufacturer",  # Already included for Azure devices
                 "model",
                 "serialNumber",
                 "operatingSystem",
@@ -143,9 +179,17 @@ def transform_intune_devices(devices, tenant_id):
             else:
                 device_ownership = "N/A"
 
-            # Intune devices don't have compliance fields from this endpoint
-            is_compliant = None
+            # Intune devices now have compliance fields
+            compliance_state = device.get("complianceState", "unknown")
+            is_compliant = 1 if compliance_state == "compliant" else 0
             is_managed = 1  # Intune devices are managed by definition
+
+            # Handle storage and memory fields
+            manufacturer = device.get("manufacturer") or "N/A"
+            total_storage = format_bytes(device.get("totalStorageSpaceInBytes"))
+            free_storage = format_bytes(device.get("freeStorageSpaceInBytes"))
+            physical_memory = format_bytes(device.get("physicalMemoryInBytes"))
+            is_encrypted = 1 if device.get("isEncrypted") else 0
 
             # Handle dates
             enrolled_date = device.get("enrolledDateTime")
@@ -163,6 +207,12 @@ def transform_intune_devices(devices, tenant_id):
                 "device_ownership": device_ownership,
                 "is_compliant": is_compliant,
                 "is_managed": is_managed,
+                "manufacturer": manufacturer,
+                "total_storage": total_storage,
+                "free_storage": free_storage,
+                "physical_memory": physical_memory,
+                "compliance_state": compliance_state,
+                "is_encrypted": is_encrypted,
                 "last_sign_in_date": last_sign_in_date,
                 "enrolled_date": enrolled_date,
                 "created_at": datetime.now().isoformat(),
@@ -205,6 +255,15 @@ def transform_azure_devices(devices, tenant_id):
             is_compliant = 1 if device.get("isCompliant") else 0
             is_managed = 1 if device.get("isManaged") else 0
 
+            # Handle additional fields for Azure devices
+            manufacturer = device.get("manufacturer") or "N/A"
+            # Azure devices don't have storage/memory/compliance state fields
+            total_storage = "N/A"
+            free_storage = "N/A"
+            physical_memory = "N/A"
+            compliance_state = "unknown"
+            is_encrypted = 0  # Azure devices don't have encryption info in this endpoint
+
             # Handle dates
             last_sign_in_date = device.get("approximateLastSignInDateTime")
             enrolled_date = None  # Azure devices don't have enrollment date in this endpoint
@@ -221,6 +280,12 @@ def transform_azure_devices(devices, tenant_id):
                 "device_ownership": device_ownership,
                 "is_compliant": is_compliant,
                 "is_managed": is_managed,
+                "manufacturer": manufacturer,
+                "total_storage": total_storage,
+                "free_storage": free_storage,
+                "physical_memory": physical_memory,
+                "compliance_state": compliance_state,
+                "is_encrypted": is_encrypted,
                 "last_sign_in_date": last_sign_in_date,
                 "enrolled_date": enrolled_date,
                 "created_at": datetime.now().isoformat(),

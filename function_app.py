@@ -12,6 +12,7 @@ from analysis.user_analysis import (
 from core.graph_beta_client import GraphBetaClient
 from core.tenant_manager import get_tenants
 from sql.databaseV2 import execute_query, query, upsert_many
+from sync.device_syncV2 import sync_devices
 from sync.group_syncV2 import sync_groups
 from sync.license_syncV2 import sync_licenses_v2
 from sync.role_syncV2 import sync_rolesV2
@@ -227,6 +228,53 @@ def subscription_syncV2(timer: func.TimerRequest) -> None:
     failed_count = len([r for r in results if r["status"] == "error"])
     if failed_count > 0:
         categorize_sync_errors(results, "Subscription V2")
+
+
+@app.timer_trigger(schedule="0 0 */6 * * *", arg_name="timer", run_on_startup=False, use_monitor=False)
+def devices_syncV2(timer: func.TimerRequest) -> None:
+    """V2 Device sync using new database schema"""
+    if timer.past_due:
+        logging.info("The timer is past due!")
+
+    logging.info("Starting device sync V2 for all tenants")
+    tenants = get_tenants()
+    total_devices = 0
+    total_relationships = 0
+    results = []
+
+    for tenant in tenants:
+        tenant_id = tenant["tenant_id"]
+        tenant_name = tenant["display_name"]
+        logging.info(f"Starting device sync for {tenant_name}")
+
+        try:
+            result = sync_devices(tenant_id, tenant_name)
+            results.append(result)
+
+            if result["status"] == "success":
+                total_devices += result.get("devices_synced", 0)
+                total_relationships += result.get("relationships_synced", 0)
+                logging.info(
+                    f"✓ V2 {tenant_name}: {result.get('devices_synced', 0)} devices, {result.get('relationships_synced', 0)} relationships synced"
+                )
+            else:
+                logging.error(f"✗ V2 {tenant_name}: {result.get('error', 'Unknown error')}")
+
+        except Exception as e:
+            error_msg = clean_error_message(str(e), tenant_name=tenant_name)
+            logging.error(f"✗ V2 {tenant_name}: {error_msg}")
+            results.append(
+                {
+                    "status": "error",
+                    "tenant_id": tenant_id,
+                    "tenant_name": tenant_name,
+                    "error": str(e),
+                }
+            )
+
+    logging.info(f"Device sync V2 completed: {total_devices} devices, {total_relationships} relationships across {len(tenants)} tenants")
+    aggregate_recent_sync_errors(results, "Device V2")
+    categorize_sync_errors(results, "Device V2")
 
 
 # HTTP TRIGGERS (Manual Endpoints)
@@ -506,6 +554,64 @@ def subscriptions_sync_http(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         error_msg = f"Subscription sync failed: {str(e)}"
+        logging.error(error_msg)
+        return create_error_response(error_message=error_msg, status_code=500)
+
+
+@app.route(route="sync/devices", methods=["POST"])
+def devices_sync_http(req: func.HttpRequest) -> func.HttpResponse:
+    """HTTP POST endpoint for device synchronization across all tenants"""
+    try:
+        logging.info("Starting manual device sync")
+        tenants = get_tenants()
+        results = []
+
+        for tenant in tenants:
+            try:
+                result = sync_devices(tenant["tenant_id"], tenant["display_name"])
+                if result["status"] == "success":
+                    logging.info(
+                        f"✓ {tenant['display_name']}: {result['devices_synced']} devices, {result['relationships_synced']} relationships synced"
+                    )
+                    results.append(
+                        {
+                            "status": "completed",
+                            "tenant_id": tenant["tenant_id"],
+                            "devices_synced": result["devices_synced"],
+                            "relationships_synced": result["relationships_synced"],
+                        }
+                    )
+                else:
+                    logging.error(f"✗ {tenant['display_name']}: {result['error']}")
+                    results.append(
+                        {
+                            "status": "error",
+                            "tenant_id": tenant["tenant_id"],
+                            "error": result.get("error", "Unknown error"),
+                        }
+                    )
+            except Exception as e:
+                logging.error(clean_error_message(str(e), tenant["display_name"]))
+                results.append({"status": "error", "tenant_id": tenant["tenant_id"], "error": str(e)})
+
+        # Use centralized error reporting (same pattern as other sync functions)
+        failed_count = len([r for r in results if r["status"] == "error"])
+        if failed_count > 0:
+            categorize_sync_errors(results, "Devices HTTP")
+
+        total_devices = sum(r.get("devices_synced", 0) for r in results if r["status"] == "completed")
+        total_relationships = sum(r.get("relationships_synced", 0) for r in results if r["status"] == "completed")
+
+        return create_success_response(
+            data={"total_devices": total_devices, "total_relationships": total_relationships, "tenants_processed": len(tenants)},
+            tenant_id="multi_tenant",
+            tenant_name="all_tenants",
+            operation="devices_sync_http",
+            message=f"Synced {total_devices} devices and {total_relationships} relationships across {len(tenants)} tenants",
+        )
+
+    except Exception as e:
+        error_msg = f"Device sync failed: {str(e)}"
         logging.error(error_msg)
         return create_error_response(error_message=error_msg, status_code=500)
 

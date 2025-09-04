@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 def get_connection():
     """Get database connection"""
-    path = os.getenv("DATABASE_PATH", "./sql/data/graph_sync.db")
+    path = os.getenv("DATABASE_PATH", "../db/sqlite.db")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     return sqlite3.connect(path)
 
@@ -237,7 +237,7 @@ def upsert_many(table, records):
 
 
 def query(sql, params=None):
-    """Execute a SELECT query"""
+    """Execute a SELECT query and return results as list of dictionaries"""
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -252,14 +252,14 @@ def query(sql, params=None):
         return [dict(row) for row in rows]
 
     except Exception as e:
-        logger.error(f"Query failed: {str(e)}")
+        logger.error(f"Query failed: {sql} with params {params}: {e}")
         raise
     finally:
         conn.close()
 
 
 def execute_query(sql, params=None):
-    """Execute an INSERT/UPDATE/DELETE query"""
+    """Execute an INSERT, UPDATE, or DELETE query"""
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -273,12 +273,26 @@ def execute_query(sql, params=None):
         return cursor.rowcount
 
     except Exception as e:
+        logger.error(f"Execute query failed: {sql} with params {params}: {e}")
         conn.rollback()
-        logger.error(f"Execute query failed: {str(e)}")
         raise
     finally:
         conn.close()
 
 
-# Schema will be initialized when sync functions are called
-init_schema()
+def execute_many(sql, params_list):
+    """Execute a query with multiple parameter sets"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.executemany(sql, params_list)
+        conn.commit()
+        return cursor.rowcount
+
+    except Exception as e:
+        logger.error(f"Execute many failed: {sql} with {len(params_list)} parameter sets: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()

@@ -85,8 +85,8 @@ def create_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def create_success_response(
     data: list[Any] | dict[str, Any] | Any,
     tenant_id: str,
-    tenant_name: str,
-    operation: str,
+    tenant_name: str = "unknown",
+    operation: str = "unknown",
     actions: list[dict[str, Any]] | None = None,
     metrics: dict[str, Any] | None = None,
     resource_id: str | None = None,
@@ -122,12 +122,12 @@ def create_success_response(
 
 def create_error_response(
     error_message: str,
+    status_code: int = 500,
     tenant_id: str | None = None,
     tenant_name: str | None = None,
     operation: str | None = None,
     data: list[Any] | dict[str, Any] | Any | None = None,
     actions: list[dict[str, Any]] | None = None,
-    status_code: int = 500,
     **additional_metadata,
 ) -> func.HttpResponse:
     response_data = {
@@ -150,43 +150,32 @@ def create_error_response(
 
 
 def create_bulk_operation_response(
-    data: list[dict[str, Any]],
+    results: list[dict[str, Any]],
     tenant_id: str,
-    tenant_name: str,
     operation: str,
-    summary: dict[str, Any],
-    actions: list[dict[str, Any]] | None = None,
-    execution_time: str | None = None,
+    message: str,
+    tenant_name: str = "unknown",
     **additional_metadata,
 ) -> func.HttpResponse:
     metadata = create_metadata(tenant_id, tenant_name, operation, **additional_metadata)
 
-    if execution_time:
-        metadata["execution_time"] = execution_time
+    # Calculate summary from results
+    successful = len([r for r in results if r.get("status") == "success"])
+    failed = len([r for r in results if r.get("status") == "error"])
 
-    metadata["summary"] = summary
+    metadata["summary"] = {"total": len(results), "successful": successful, "failed": failed}
 
     response_data = {
-        "success": True,
-        "data": data,
+        "success": failed == 0,  # Success if no failures
+        "data": results,
         "metadata": metadata,
+        "message": message,
     }
 
-    if actions:
-        response_data["actions"] = create_actions(actions)
-
-    # Determine status code based on summary
-    failed_count = summary.get("failed", 0)
-    successful_count = (
-        summary.get("successfully_disabled", 0)
-        or summary.get("successfully_reset", 0)
-        or summary.get("successfully_assigned", 0)
-        or summary.get("successfully_deleted", 0)
-    )
-
-    if failed_count == 0 and successful_count > 0:
+    # Determine status code based on results
+    if failed == 0 and successful > 0:
         status_code = 200  # Complete success
-    elif failed_count > 0 and successful_count > 0:
+    elif failed > 0 and successful > 0:
         status_code = 207  # Multi-status - mixed results
     else:
         status_code = 500  # All failed

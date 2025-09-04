@@ -9,7 +9,7 @@ import requests
 # Note: time.sleep() is acceptable here because:
 # 1. Azure Functions handles scaling automatically
 # 2. These are legitimate API rate limits that must be respected
-# 3. The GraphBetaClient is synchronous by design
+# 3. The GraphBetaClient is synchronous by design.
 
 
 class GraphBetaClient:
@@ -114,7 +114,6 @@ class GraphBetaClient:
             elif response.status_code == 503:
                 error_msg = f"503 Service Unavailable - Tenant {self.tenant_id}: Microsoft Graph service temporarily unavailable."
                 logging.warning(error_msg + " Retrying after delay...")
-                # For service unavailable, implement exponential backoff
                 retry_count = getattr(self, "_retry_count", 0)
                 self._retry_count = retry_count + 1
                 wait_time = min(30, 5 * (2**retry_count))  # Max 30 seconds
@@ -128,7 +127,6 @@ class GraphBetaClient:
             results = data.get("value", [])
             all_results.extend(results)
 
-            # If top parameter was specified, respect it and don't follow pagination
             if top and len(all_results) >= top:
                 return all_results[:top]
 
@@ -136,23 +134,37 @@ class GraphBetaClient:
 
         return all_results
 
+    def patch_user(self, user_id, update_data):
+        headers = {
+            "Authorization": f"Bearer {self.get_token()}",
+            "Content-Type": "application/json",
+        }
+
+        url = f"{self.base_url}/users/{user_id}"
+        response = requests.patch(url, headers=headers, json=update_data)
+
+        if response.status_code == 429:
+            retry_after = int(response.headers.get("Retry-After", 5))
+            logging.warning(f"Rate limited - waiting {retry_after} seconds")
+            time.sleep(retry_after)
+            response = requests.patch(url, headers=headers, json=update_data)
+
+        response.raise_for_status()
+        return response.json() if response.content else {}
+
     def get_tenant_details(self, tenant_id):
         data = self.get(f"/organization/{tenant_id}")
         return data
 
     def create_user(self, user_data):
-        """Create a new user account via Microsoft Graph Beta API"""
-
         try:
             headers = {
                 "Authorization": f"Bearer {self.get_token()}",
                 "Content-Type": "application/json",
             }
 
-            # Microsoft Graph Beta API endpoint to create user
             url = f"{self.base_url}/users"
 
-            # Filter out non-standard Graph API fields
             graph_user_data = {
                 "accountEnabled": user_data.get("accountEnabled", True),
                 "displayName": user_data.get("displayName"),
@@ -166,10 +178,8 @@ class GraphBetaClient:
                 "mobilePhone": user_data.get("mobilePhone"),
             }
 
-            # Remove None values
             graph_user_data = {k: v for k, v in graph_user_data.items() if v is not None}
 
-            # Debug logging
             logging.info(f"Creating user in tenant: {self.tenant_id}")
             logging.info(f"Graph Beta API URL: {url}")
             logging.info(f"Original user data: {user_data}")
@@ -177,15 +187,12 @@ class GraphBetaClient:
 
             response = requests.post(url, headers=headers, json=graph_user_data)
 
-            # Handle rate limiting
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 5))
                 logging.warning(f"Rate limited while creating user - waiting {retry_after} seconds")
                 time.sleep(retry_after)
-                # retry the request
                 response = requests.post(url, headers=headers, json=user_data)
 
-            # Enhanced error handling
             if response.status_code == 401:
                 error_msg = "401 Unauthorized - Cannot create user: Authentication failed"
                 logging.error(error_msg)
@@ -205,7 +212,7 @@ class GraphBetaClient:
                 try:
                     error_details = response.json()
                     error_msg = f"400 Bad Request - Invalid user data: {error_details.get('error', {}).get('message', 'Unknown error')}"
-                except:
+                except Exception:
                     error_msg = "400 Bad Request - Invalid user data"
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
@@ -215,14 +222,9 @@ class GraphBetaClient:
                 logging.warning(error_msg)
                 return {"status": "error", "error": error_msg}
 
-            # Check for success (201 Created is expected for POST operations)
             if response.status_code == 201:
                 created_user = response.json()
                 logging.info(f"Successfully created user {created_user.get('userPrincipalName', 'Unknown')}")
-
-                # Note: Role and license assignments need to be done separately
-                # - Role assignment: POST /users/{id}/appRoleAssignments
-                # - License assignment: POST /users/{id}/assignLicense
 
                 return {
                     "status": "success",
@@ -230,13 +232,12 @@ class GraphBetaClient:
                     "data": created_user,
                 }
 
-            # Handle other error status codes
             logging.error(f"Graph Beta API returned status code: {response.status_code}")
             logging.error(f"Response headers: {dict(response.headers)}")
             try:
                 error_details = response.json()
                 logging.error(f"Response body: {error_details}")
-            except:
+            except Exception:
                 logging.error(f"Response text: {response.text}")
 
             response.raise_for_status()
@@ -253,32 +254,25 @@ class GraphBetaClient:
             return {"status": "error", "error": error_msg}
 
     def delete_user(self, user_id):
-        """Delete a user account via Microsoft Graph Beta API"""
-
         try:
             headers = {
                 "Authorization": f"Bearer {self.get_token()}",
                 "Content-Type": "application/json",
             }
 
-            # Microsoft Graph Beta API endpoint to delete user
             url = f"{self.base_url}/users/{user_id}"
 
-            # Debug logging
             logging.info(f"Deleting user {user_id} in tenant: {self.tenant_id}")
             logging.info(f"Graph Beta API URL: {url}")
 
             response = requests.delete(url, headers=headers)
 
-            # Handle rate limiting
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 5))
                 logging.warning(f"Rate limited while deleting user - waiting {retry_after} seconds")
                 time.sleep(retry_after)
-                # retry the request
                 response = requests.delete(url, headers=headers)
 
-            # Enhanced error handling
             if response.status_code == 401:
                 error_msg = "401 Unauthorized - Cannot delete user: Authentication failed"
                 logging.error(error_msg)
@@ -298,7 +292,7 @@ class GraphBetaClient:
                 try:
                     error_details = response.json()
                     error_msg = f"400 Bad Request - Invalid request: {error_details.get('error', {}).get('message', 'Unknown error')}"
-                except:
+                except Exception:
                     error_msg = "400 Bad Request - Invalid request"
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
@@ -308,18 +302,16 @@ class GraphBetaClient:
                 logging.warning(error_msg)
                 return {"status": "error", "error": error_msg}
 
-            # Check for success (204 No Content is expected for DELETE operations)
             if response.status_code == 204:
                 logging.info(f"Successfully deleted user {user_id}")
                 return {"status": "success", "message": f"User {user_id} deleted successfully"}
 
-            # Handle other error status codes
             logging.error(f"Graph Beta API returned status code: {response.status_code}")
             logging.error(f"Response headers: {dict(response.headers)}")
             try:
                 error_details = response.json()
                 logging.error(f"Response body: {error_details}")
-            except:
+            except Exception:
                 logging.error(f"Response text: {response.text}")
 
             response.raise_for_status()
@@ -336,33 +328,26 @@ class GraphBetaClient:
             return {"status": "error", "error": error_msg}
 
     def update_user(self, user_id, user_updates):
-        """Update an existing user account via Microsoft Graph Beta API"""
-
         try:
             headers = {
                 "Authorization": f"Bearer {self.get_token()}",
                 "Content-Type": "application/json",
             }
 
-            # Microsoft Graph Beta API endpoint to update user
             url = f"{self.base_url}/users/{user_id}"
 
-            # Debug logging
             logging.info(f"Updating user {user_id} in tenant: {self.tenant_id}")
             logging.info(f"Graph Beta API URL: {url}")
             logging.info(f"Update data: {user_updates}")
 
             response = requests.patch(url, headers=headers, json=user_updates)
 
-            # Handle rate limiting
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 5))
                 logging.warning(f"Rate limited while updating user - waiting {retry_after} seconds")
                 time.sleep(retry_after)
-                # retry the request
                 response = requests.patch(url, headers=headers, json=user_updates)
 
-            # Enhanced error handling
             if response.status_code == 401:
                 error_msg = "401 Unauthorized - Cannot update user: Authentication failed"
                 logging.error(error_msg)
@@ -382,7 +367,7 @@ class GraphBetaClient:
                 try:
                     error_details = response.json()
                     error_msg = f"400 Bad Request - Invalid update data: {error_details.get('error', {}).get('message', 'Unknown error')}"
-                except:
+                except Exception:
                     error_msg = "400 Bad Request - Invalid update data"
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
@@ -392,19 +377,17 @@ class GraphBetaClient:
                 logging.warning(error_msg)
                 return {"status": "error", "error": error_msg}
 
-            # Check for success (200 OK is expected for PATCH operations)
             if response.status_code == 200:
                 updated_user = response.json()
                 logging.info(f"Successfully updated user {user_id}")
                 return {"status": "success", "message": f"User {user_id} updated successfully", "data": updated_user}
 
-            # Handle other error status codes
             logging.error(f"Graph Beta API returned status code: {response.status_code}")
             logging.error(f"Response headers: {dict(response.headers)}")
             try:
                 error_details = response.json()
                 logging.error(f"Response body: {error_details}")
-            except:
+            except Exception:
                 logging.error(f"Response text: {response.text}")
 
             response.raise_for_status()
@@ -421,14 +404,12 @@ class GraphBetaClient:
             return {"status": "error", "error": error_msg}
 
     def assign_role(self, user_id, role_name):
-        """Assign a directory role to a user via Microsoft Graph Beta API"""
         try:
             headers = {
                 "Authorization": f"Bearer {self.get_token()}",
                 "Content-Type": "application/json",
             }
 
-            # First, get the role template ID for the role name
             role_url = f"{self.base_url}/directoryRoleTemplates"
             logging.info(f"Fetching role template for '{role_name}'")
 
@@ -441,7 +422,6 @@ class GraphBetaClient:
             role_templates = role_response.json().get("value", [])
             target_role = None
 
-            # Find the role template by display name
             for role in role_templates:
                 if role.get("displayName", "").lower() == role_name.lower():
                     target_role = role
@@ -455,7 +435,6 @@ class GraphBetaClient:
             role_template_id = target_role.get("id")
             logging.info(f"Found role template ID: {role_template_id} for role: {role_name}")
 
-            # First, check if the role is activated in the tenant
             activated_roles_url = f"{self.base_url}/directoryRoles"
             activated_response = requests.get(activated_roles_url, headers=headers)
 
@@ -464,7 +443,6 @@ class GraphBetaClient:
                 role_exists = any(role.get("roleTemplateId") == role_template_id for role in activated_roles)
 
                 if not role_exists:
-                    # Activate the role in the tenant first
                     logging.info(f"Role '{role_name}' not activated in tenant. Activating...")
                     activate_data = {"roleTemplateId": role_template_id}
                     activate_url = f"{self.base_url}/directoryRoles"
@@ -476,7 +454,6 @@ class GraphBetaClient:
                         return {"status": "error", "error": error_msg}
 
                     logging.info(f"Successfully activated role '{role_name}' in tenant")
-                    # Get the activated role ID
                     activated_response = requests.get(activated_roles_url, headers=headers)
                     if activated_response.status_code == 200:
                         activated_roles = activated_response.json().get("value", [])
@@ -493,7 +470,6 @@ class GraphBetaClient:
                         logging.error(error_msg)
                         return {"status": "error", "error": error_msg}
                 else:
-                    # Role already exists, get its ID
                     existing_role = next((role for role in activated_roles if role.get("roleTemplateId") == role_template_id), None)
                     if existing_role:
                         role_template_id = existing_role.get("id")
@@ -503,19 +479,17 @@ class GraphBetaClient:
                         logging.error(error_msg)
                         return {"status": "error", "error": error_msg}
 
-            # Now assign the role to the user using the activated role ID
             assignment_url = f"{self.base_url}/directoryRoles/{role_template_id}/members/$ref"
 
             assignment_data = {"@odata.id": f"{self.base_url}/users/{user_id}"}
 
-            logging.info(f"Assigning role '{role_name}' to user {user_id}")
-            logging.info(f"Using activated role ID: {role_template_id}")
-            logging.info(f"Assignment URL: {assignment_url}")
-            logging.info(f"Assignment data: {assignment_data}")
+            logging.info(
+                f"Assigning role '{role_name}' to user {user_id}, using activated role ID: {role_template_id}, assignment URL: {assignment_url}, assignment data: {assignment_data}"
+            )
 
             assignment_response = requests.post(assignment_url, headers=headers, json=assignment_data)
 
-            if assignment_response.status_code == 204:  # No Content is success for this endpoint
+            if assignment_response.status_code == 204:
                 logging.info(f"Successfully assigned role '{role_name}' to user {user_id}")
                 return {"status": "success", "message": f"Role '{role_name}' assigned successfully"}
             else:
@@ -523,7 +497,7 @@ class GraphBetaClient:
                 try:
                     error_details = assignment_response.json()
                     error_msg += f" - {error_details.get('error', {}).get('message', 'Unknown error')}"
-                except:
+                except Exception:
                     pass
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
@@ -534,14 +508,12 @@ class GraphBetaClient:
             return {"status": "error", "error": error_msg}
 
     def assign_license(self, user_id, license_sku):
-        """Assign a license to a user via Microsoft Graph Beta API"""
         try:
             headers = {
                 "Authorization": f"Bearer {self.get_token()}",
                 "Content-Type": "application/json",
             }
 
-            # First, get available licenses from the tenant
             licenses_url = f"{self.base_url}/subscribedSkus"
             logging.info(f"Fetching available licenses for tenant {self.tenant_id}")
 
@@ -554,13 +526,11 @@ class GraphBetaClient:
             tenant_licenses = licenses_response.json().get("value", [])
             target_license = None
 
-            # Find the license by name or SKU ID
             for license_info in tenant_licenses:
                 sku_id = license_info.get("skuId")
                 sku_part_number = license_info.get("skuPartNumber", "")
                 display_name = license_info.get("capabilityStatus", "")
 
-                # Check if the input matches SKU ID, part number, or display name
                 if (
                     license_sku.lower() == sku_id.lower()
                     or license_sku.lower() == sku_part_number.lower()
@@ -570,7 +540,7 @@ class GraphBetaClient:
                     break
 
             if not target_license:
-                available_licenses = [l.get("skuPartNumber", l.get("skuId")) for l in tenant_licenses]
+                available_licenses = [license_item.get("skuPartNumber", license_item.get("skuId")) for license_item in tenant_licenses]
                 error_msg = f"License '{license_sku}' not found in tenant. Available licenses: {available_licenses}"
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
@@ -578,18 +548,16 @@ class GraphBetaClient:
             actual_sku_id = target_license.get("skuId")
             logging.info(f"Found license: {target_license.get('skuPartNumber', actual_sku_id)} (SKU ID: {actual_sku_id})")
 
-            # Microsoft Graph Beta API endpoint for license assignment
             url = f"{self.base_url}/users/{user_id}/assignLicense"
 
-            # License assignment payload
             license_data = {
                 "addLicenses": [
                     {
-                        "disabledPlans": [],  # No plans disabled
+                        "disabledPlans": [],
                         "skuId": actual_sku_id,
                     }
                 ],
-                "removeLicenses": [],  # No licenses to remove
+                "removeLicenses": [],
             }
 
             logging.info(f"Assigning license '{license_sku}' (SKU: {actual_sku_id}) to user {user_id}")
@@ -607,7 +575,7 @@ class GraphBetaClient:
                 try:
                     error_details = response.json()
                     error_msg += f" - {error_details.get('error', {}).get('message', 'Unknown error')}"
-                except:
+                except Exception:
                     pass
                 logging.error(error_msg)
                 return {"status": "error", "error": error_msg}
@@ -618,31 +586,24 @@ class GraphBetaClient:
             return {"status": "error", "error": error_msg}
 
     def disable_user(self, user_id):
-        """Disable a user account by setting accountEnabled to False"""
-
         try:
             headers = {
                 "Authorization": f"Bearer {self.get_token()}",
                 "Content-Type": "application/json",
             }
 
-            # microsoft graph API endpoint to update user
             url = f"{self.base_url}/users/{user_id}"
 
-            # request body to disable the user
             data = {"accountEnabled": False}
 
             response = requests.patch(url, headers=headers, json=data)
 
-            # handle rate limiting
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 5))
                 logging.warning(f"Rate limited while disabling user - waiting {retry_after} seconds")
                 time.sleep(retry_after)
-                # retry the request
                 response = requests.patch(url, headers=headers, json=data)
 
-            # enhanced error handling
             if response.status_code == 401:
                 error_msg = f"401 Unauthorized - Cannot disable user {user_id}: Authentication failed"
                 logging.error(error_msg)
@@ -663,12 +624,10 @@ class GraphBetaClient:
                 logging.warning(error_msg)
                 return {"status": "error", "error": error_msg}
 
-            # check for success (204 No Content is expected for PATCH operations)
             if response.status_code in [200, 204]:
                 logging.info(f"Successfully disabled user {user_id}")
                 return {"status": "success", "message": f"User {user_id} disabled successfully"}
 
-            # handle other error status codes
             response.raise_for_status()
             return {"status": "success", "message": f"User {user_id} disabled successfully"}
 
@@ -683,37 +642,29 @@ class GraphBetaClient:
             return {"status": "error", "error": error_msg}
 
     def reset_user_password(self, user_id):
-        """Reset a user's password with a secure temporary password and force change on next login"""
-
         try:
             headers = {
                 "Authorization": f"Bearer {self.get_token()}",
                 "Content-Type": "application/json",
             }
 
-            # Generate secure temporary password
             import secrets
             import string
 
-            # 12 character password with letters, digits, and special chars
             temp_password = "".join(secrets.choice(string.ascii_letters + string.digits + "!@#$%&*") for _ in range(12))
 
-            # Microsoft Graph API endpoint to update user password
             url = f"{self.base_url}/users/{user_id}"
 
-            # Request body - always force change and set temp password
             data = {"passwordProfile": {"password": temp_password, "forceChangePasswordNextSignIn": True}}
 
             response = requests.patch(url, headers=headers, json=data)
 
-            # Handle rate limiting
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 5))
                 logging.warning(f"Rate limited while resetting password - waiting {retry_after} seconds")
                 time.sleep(retry_after)
                 response = requests.patch(url, headers=headers, json=data)
 
-            # Enhanced error handling
             if response.status_code == 401:
                 error_msg = f"401 Unauthorized - Cannot reset password for user {user_id}: Authentication failed"
                 logging.error(error_msg)
@@ -734,12 +685,10 @@ class GraphBetaClient:
                 logging.warning(error_msg)
                 return {"status": "error", "error": error_msg}
 
-            # Check for success (204 No Content is expected for PATCH operations)
             if response.status_code in [200, 204]:
                 logging.info(f"Successfully reset password for user {user_id}")
                 return {"status": "success", "message": f"Password reset for user {user_id}", "temporary_password": temp_password}
 
-            # Handle other error status codes
             response.raise_for_status()
             return {"status": "success", "message": f"Password reset for user {user_id}", "temporary_password": temp_password}
 

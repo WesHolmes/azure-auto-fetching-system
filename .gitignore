@@ -139,8 +139,6 @@ AzuriteConfig
 .DS_Store
 CLAUDE.md
 .vscode/
-
-graph_sync.db
 .byeo/
 .claude/
 archive/

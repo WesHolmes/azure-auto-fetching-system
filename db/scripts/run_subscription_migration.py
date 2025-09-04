@@ -15,12 +15,12 @@ import sys
 # Add parent directory to path to import core modules
 sys.path.append(str(Path(__file__).parent.parent))
 
-from sql.databaseV2 import get_connection
+from db.db_client import get_connection
 
 
 def run_migration():
     """Run the subscription table migration"""
-    db_path = Path(__file__).parent / "data" / "graph_sync.db"
+    db_path = Path(__file__).parent / "data" / "sqlite.db"
 
     if not db_path.exists():
         print(f"Database not found at {db_path}")

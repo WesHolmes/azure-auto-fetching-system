@@ -8,7 +8,9 @@ logger = logging.getLogger(__name__)
 
 def get_connection():
     """Get database connection"""
-    path = os.getenv("DATABASE_PATH", "../db/sqlite.db")
+    # Use absolute path to ensure database is created in the correct location
+    default_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "db", "sqlite.db")
+    path = os.getenv("DATABASE_PATH", default_path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     return sqlite3.connect(path)
 

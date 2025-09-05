@@ -1,6 +1,8 @@
 import azure.functions as func
 from dotenv import load_dotenv
 
+from functions.devices.http import get_devices, http_devices_sync
+from functions.devices.timer import timer_devices_sync
 from functions.groups.http import get_groups, http_group_sync
 from functions.groups.timer import timer_groups_sync
 from functions.licenses.http import get_licenses, http_licenses_sync, http_subscription_sync
@@ -31,44 +33,22 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 # =============================================================================
 
 # User sync - every minute at second 0
-app.timer_trigger(
-  schedule="0 */1 * * * *",
-  arg_name="timer",
-  run_on_startup=False,
-  use_monitor=False
-)(timer_tenants_sync)
+app.timer_trigger(schedule="0 */1 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(timer_tenants_sync)
 
 # License sync - every minute at second 15
-app.timer_trigger(
-  schedule="15 */1 * * * *",
-  arg_name="timer",
-  run_on_startup=False,
-  use_monitor=False
-)(timer_licenses_sync)
+app.timer_trigger(schedule="15 */1 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(timer_licenses_sync)
 
 # Role sync - every 2 minutes at second 0
-app.timer_trigger(
-  schedule="0 */2 * * * *",
-  arg_name="timer",
-  run_on_startup=False,
-  use_monitor=False
-)(timer_roles_sync)
+app.timer_trigger(schedule="0 */2 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(timer_roles_sync)
 
 # Group sync - every minute at second 30
-app.timer_trigger(
-  schedule="30 */1 * * * *",
-  arg_name="timer",
-  run_on_startup=False,
-  use_monitor=False
-)(timer_groups_sync)
+app.timer_trigger(schedule="30 */1 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(timer_groups_sync)
 
 # # Subscription sync - every minute at second 45
-app.timer_trigger(
-  schedule="45 */1 * * * *",
-  arg_name="timer",
-  run_on_startup=False,
-  use_monitor=False
-)(timer_subscriptions_sync)
+app.timer_trigger(schedule="45 */1 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(timer_subscriptions_sync)
+
+# Device sync - every 6 hours at minute 0
+app.timer_trigger(schedule="0 0 */6 * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(timer_devices_sync)
 
 # # # License analysis - every hour at minute 25
 # app.timer_trigger(schedule="0 25 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(get_licenses_analysis)
@@ -80,12 +60,7 @@ app.timer_trigger(
 # app.timer_trigger(schedule="0 15 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(get_groups_analysis)
 
 # Daily report generation - every day at 6 AM
-app.timer_trigger(
-  schedule="0 0 6 * * *",
-  arg_name="timer",
-  run_on_startup=False,
-  use_monitor=False
-)(generate_user_report)
+app.timer_trigger(schedule="0 0 6 * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(generate_user_report)
 
 # =============================================================================
 # HTTP TRIGGERS (API Endpoints)
@@ -101,6 +76,8 @@ app.route(route="sync/roles", methods=["POST"])(http_sync_roles)
 app.route(route="sync/groups", methods=["POST"])(http_group_sync)
 
 app.route(route="sync/subscriptions", methods=["POST"])(http_subscription_sync)
+
+app.route(route="sync/devices", methods=["POST"])(http_devices_sync)
 
 # User Management Endpoints
 app.route(route="tenant/users/{user_id}", methods=["GET"])(get_user)
@@ -125,6 +102,8 @@ app.route(route="tenant/licenses", methods=["GET"])(get_licenses)
 app.route(route="tenant/roles", methods=["GET"])(get_roles)
 
 app.route(route="tenant/groups", methods=["GET"])(get_groups)
+
+app.route(route="tenant/devices", methods=["GET"])(get_devices)
 
 
 # Reporting Endpoints

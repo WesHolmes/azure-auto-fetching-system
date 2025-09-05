@@ -143,3 +143,4 @@ CLAUDE.md
 .claude/
 archive/
 sqlite.db
+sqlite.db-journal

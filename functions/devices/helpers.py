@@ -39,26 +39,33 @@ def format_bytes(bytes_value):
     return "0 B"
 
 
-def detect_tenant_capabilities(tenant_id):
-    """Detect if tenant has premium capabilities by testing signin activity access"""
+def _test_tenant_capability(graph, graph_beta, tenant_id):
+    """Helper function to test tenant capability for premium features"""
     try:
-        graph = GraphBetaClient(tenant_id)
+        # Test with a single user to check if signin activity is accessible
         test_user = graph.get("/users", select=["id", "userPrincipalName"], top=1)
-
-        if test_user:
-            try:
-                user_id = test_user[0]["id"]
-                graph.get(f"/users/{user_id}/signInActivity")
-                logger.info(f"Tenant {tenant_id} is premium - using beta endpoint")
-                return True
-            except Exception:
-                logger.info(f"Tenant {tenant_id} is not premium - using v1.0 endpoint")
-                return False
-        else:
+        if not test_user:
             logger.warning(f"No users found in tenant {tenant_id} for capability testing")
             return False
-    except Exception as e:
-        logger.warning(f"Could not determine tenant capability for {tenant_id}: {str(e)}")
+
+        # Try to fetch signin activity for the first user (BETA endpoint)
+        user_id = test_user[0]["id"]
+        try:
+            graph_beta.get(f"/users/{user_id}/signInActivity", select=["lastSignInDateTime"])
+            logger.info(f"Tenant {tenant_id} is PREMIUM - beta signin activity accessible")
+            return True
+        except Exception:
+            # Fallback: test if we can access beta MFA data (another beta-only feature)
+            try:
+                # Test if we can access MFA registration details (beta endpoint)
+                graph_beta.get("/reports/authenticationMethods/userRegistrationDetails", select=["id"], top=1)
+                logger.info(f"Tenant {tenant_id} is PREMIUM - beta MFA data accessible")
+                return True
+            except Exception:
+                logger.info(f"Tenant {tenant_id} is NOT PREMIUM - no beta features accessible")
+                return False
+    except Exception as capability_error:
+        logger.warning(f"Could not determine tenant capability for {tenant_id}: {str(capability_error)}")
         return False
 
 
@@ -93,6 +100,15 @@ def fetch_intune_devices(tenant_id):
         )
 
         logger.info(f"Successfully fetched {len(devices)} Intune devices for tenant {tenant_id}")
+
+        # Debug: Log sample device data to see what fields are available
+        if devices:
+            sample_device = devices[0]
+            logger.debug(f"Sample Intune device fields: {list(sample_device.keys())}")
+            logger.debug(
+                f"Sample device storage fields: totalStorageSpaceInBytes={sample_device.get('totalStorageSpaceInBytes')}, freeStorageSpaceInBytes={sample_device.get('freeStorageSpaceInBytes')}, physicalMemoryInBytes={sample_device.get('physicalMemoryInBytes')}, isEncrypted={sample_device.get('isEncrypted')}"
+            )
+
         return devices
 
     except Exception as e:
@@ -177,10 +193,21 @@ def transform_intune_devices(devices, tenant_id):
 
             # Handle storage and memory fields
             manufacturer = device.get("manufacturer") or "N/A"
-            total_storage = format_bytes(device.get("totalStorageSpaceInBytes"))
-            free_storage = format_bytes(device.get("freeStorageSpaceInBytes"))
-            physical_memory = format_bytes(device.get("physicalMemoryInBytes"))
-            is_encrypted = 1 if device.get("isEncrypted") else 0
+
+            # Debug logging for storage fields
+            total_storage_bytes = device.get("totalStorageSpaceInBytes")
+            free_storage_bytes = device.get("freeStorageSpaceInBytes")
+            physical_memory_bytes = device.get("physicalMemoryInBytes")
+            is_encrypted_raw = device.get("isEncrypted")
+
+            logger.debug(
+                f"Device {device_name} storage data: total={total_storage_bytes}, free={free_storage_bytes}, memory={physical_memory_bytes}, encrypted={is_encrypted_raw}"
+            )
+
+            total_storage = format_bytes(total_storage_bytes)
+            free_storage = format_bytes(free_storage_bytes)
+            physical_memory = format_bytes(physical_memory_bytes)
+            is_encrypted = 1 if is_encrypted_raw else 0
 
             # Handle dates
             enrolled_date = device.get("enrolledDateTime")
@@ -383,8 +410,10 @@ def sync_devices(tenant_id, tenant_name):
     init_schema()
 
     try:
-        # Detect tenant capabilities for premium features
-        is_premium = detect_tenant_capabilities(tenant_id)
+        # Test tenant capability for premium features
+        graph = GraphClient(tenant_id)
+        graph_beta = GraphBetaClient(tenant_id)
+        is_premium = _test_tenant_capability(graph, graph_beta, tenant_id)
 
         all_device_records = []
         all_relationship_records = []

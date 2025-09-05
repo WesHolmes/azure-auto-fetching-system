@@ -210,7 +210,8 @@ def fetch_user_groups_batch(tenant_id, user_ids):
             return user_id, (False, 0)
 
     # Use ThreadPoolExecutor to fetch groups concurrently
-    max_workers = 20  # Limit concurrent requests to avoid rate limiting
+    # Increase workers for larger datasets, but cap to avoid rate limiting
+    max_workers = min(30, len(user_ids))  # Scale with dataset size, max 30 workers
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all group fetch tasks
@@ -229,9 +230,127 @@ def fetch_user_groups_batch(tenant_id, user_ids):
     return results
 
 
+def transform_single_user(user, tenant_id, mfa_lookup, is_premium, group_results):
+    """Transform a single user record (for concurrent processing)"""
+    user_id = user.get("id")
+    display_name = user.get("displayName", "Unknown")
+    upn = user.get("userPrincipalName")
+
+    try:
+        # Get last sign-in based on tenant premium status
+        if is_premium:
+            # Premium tenant - use actual signin data
+            signin_activity = user.get("signInActivity", {})
+            last_sign_in = signin_activity.get("lastSignInDateTime", None)
+
+            # If no signin activity date, set to default (1900-01-01)
+            if last_sign_in is None:
+                last_sign_in = "1900-01-01"
+        else:
+            # Non-premium tenant - set to NULL (no access to signin data)
+            last_sign_in = None
+
+        # get license count
+        assigned_licenses = user.get("assignedLicenses", [])
+        license_count = len(assigned_licenses)
+
+        # get mfa details based on tenant premium status
+        if is_premium:
+            # Premium tenant (beta) - use actual MFA data from beta endpoint
+            mfa_data = mfa_lookup.get(user_id, {})
+            if mfa_data:
+                # We have MFA data from beta endpoint
+                is_mfa_registered = mfa_data.get("isMfaRegistered", False)
+                is_mfa_compliant = 1 if is_mfa_registered else 0
+            else:
+                # No MFA data found for this user, default to 0 (not compliant)
+                is_mfa_compliant = 0
+        else:
+            # Non-premium tenant (v1.0 only) - set MFA compliance to NULL (no access to MFA data)
+            is_mfa_compliant = None
+
+        # Get group count and admin status from pre-fetched results
+        is_admin, group_count = group_results.get(user_id, (False, 0))
+
+        # Handle primary_email (required field)
+        primary_email = user.get("mail") or upn or "unknown@domain.com"
+
+        # Get password change date
+        last_password_change = user.get("lastPasswordChangeDateTime")
+
+        # Get created date
+        created_at = user.get("createdDateTime") or datetime.now().isoformat()
+
+        # Handle user properties - both premium and non-premium tenants can access these via v1.0
+        # Only MFA compliance and signin activity are restricted to premium tenants
+        department = user.get("department") or "N/A"
+        job_title = user.get("jobTitle") or "N/A"
+        office_location = user.get("officeLocation") or "N/A"
+        mobile_phone = user.get("mobilePhone") or "N/A"
+        account_type = user.get("userType") or "Member"
+
+        record = {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "user_principal_name": upn,
+            "primary_email": primary_email,
+            "display_name": display_name,
+            "department": department,
+            "job_title": job_title,
+            "office_location": office_location,
+            "mobile_phone": mobile_phone,
+            "account_type": account_type,
+            "account_enabled": 1 if user.get("accountEnabled") else 0,
+            "is_global_admin": 1 if is_admin else 0,
+            "is_mfa_compliant": is_mfa_compliant,  # Now uses the variable that can be NULL for non-premium
+            "license_count": license_count,
+            "group_count": group_count,
+            "last_sign_in_date": last_sign_in,
+            "last_password_change": last_password_change,
+            "created_at": created_at,
+            "last_updated": datetime.now().isoformat(),
+        }
+        return record
+
+    except Exception as e:
+        logger.error(f"Failed to process user {display_name}: {str(e)}")
+        # Add basic record
+        primary_email = user.get("mail") or upn or "unknown@domain.com"
+        created_at = user.get("createdDateTime") or datetime.now().isoformat()
+
+        # Handle user properties for basic record - both premium and non-premium tenants can access these
+        department = user.get("department") or "N/A"
+        job_title = user.get("jobTitle") or "N/A"
+        office_location = user.get("officeLocation") or "N/A"
+        mobile_phone = user.get("mobilePhone") or "N/A"
+        account_type = user.get("userType") or "Member"
+
+        basic_record = {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "user_principal_name": upn,
+            "primary_email": primary_email,
+            "display_name": display_name,
+            "department": department,
+            "job_title": job_title,
+            "office_location": office_location,
+            "mobile_phone": mobile_phone,
+            "account_type": account_type,
+            "account_enabled": 1 if user.get("accountEnabled") else 0,
+            "is_global_admin": 0,
+            "is_mfa_compliant": None if not is_premium else 0,  # NULL for v1.0 tenants, 0 for beta tenants with error
+            "license_count": 0,
+            "group_count": 0,
+            "last_sign_in_date": None if not is_premium else "1900-01-01",  # NULL for v1.0 tenants, default for beta tenants with error
+            "last_password_change": user.get("lastPasswordChangeDateTime"),
+            "created_at": created_at,
+            "last_updated": datetime.now().isoformat(),
+        }
+        return basic_record
+
+
 def transform_user_records(users, tenant_id, mfa_lookup, is_premium=None):
-    """Transform Graph API users to database records"""
-    # is_premium = True
+    """Transform Graph API users to database records with concurrent processing"""
     records = []
     start_time = datetime.now()
 
@@ -245,135 +364,35 @@ def transform_user_records(users, tenant_id, mfa_lookup, is_premium=None):
     group_results = fetch_user_groups_batch(tenant_id, user_ids)
     logger.info(f"Completed group fetching in {(datetime.now() - start_time).total_seconds():.1f}s")
 
-    for i, user in enumerate(users, 1):
-        user_id = user.get("id")
-        display_name = user.get("displayName", "Unknown")
-        upn = user.get("userPrincipalName")
-        account_enabled = user.get("accountEnabled", True)
+    # Use ThreadPoolExecutor for concurrent user transformation
+    # Scale workers based on dataset size for better performance
+    max_workers = min(20, len(users))  # Scale with dataset size, max 20 workers
+    logger.info(f"Starting concurrent user transformation with {max_workers} workers...")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_user = {
+            executor.submit(transform_single_user, user, tenant_id, mfa_lookup, is_premium, group_results): user for user in users
+        }
 
-        if i % 50 == 0:
-            elapsed = (datetime.now() - start_time).total_seconds()
-            rate = i / elapsed
-            eta = (len(users) - i) / rate
-            logger.info(f"Processing user {i}/{len(users)} - Elapsed: {elapsed:.1f}s, ETA: {eta:.1f}s")
+        processed_count = 0
+        total_users = len(users)
 
-        try:
-            # Get last sign-in based on tenant premium status
-            if is_premium:
-                # Premium tenant - use actual signin data
-                signin_activity = user.get("signInActivity", {})
-                last_sign_in = signin_activity.get("lastSignInDateTime", None)
+        for future in as_completed(future_to_user):
+            user = future_to_user[future]
+            try:
+                record = future.result()
+                records.append(record)
+            except Exception as e:
+                logger.warning(f"Failed to process user {user.get('displayName', 'unknown')}: {str(e)}")
+                continue
 
-                # If no signin activity date, set to default (1900-01-01)
-                if last_sign_in is None:
-                    last_sign_in = "1900-01-01"
-            else:
-                # Non-premium tenant - set to NULL (no access to signin data)
-                last_sign_in = None
+            processed_count += 1
+            if processed_count % 100 == 0 or processed_count == total_users:
+                elapsed = (datetime.now() - start_time).total_seconds()
+                rate = processed_count / elapsed
+                eta = (total_users - processed_count) / rate if rate > 0 else 0
+                logger.info(f"Processed {processed_count}/{total_users} users - Elapsed: {elapsed:.1f}s, ETA: {eta:.1f}s")
 
-            # get license count
-            assigned_licenses = user.get("assignedLicenses", [])
-            license_count = len(assigned_licenses)
-            is_active_license = 1 if account_enabled else 0
-
-            # get mfa details based on tenant premium status
-            if is_premium:
-                # Premium tenant (beta) - use actual MFA data from beta endpoint
-                mfa_data = mfa_lookup.get(user_id, {})
-                if mfa_data:
-                    # We have MFA data from beta endpoint
-                    is_mfa_registered = mfa_data.get("isMfaRegistered", False)
-                    is_mfa_compliant = 1 if is_mfa_registered else 0
-                else:
-                    # No MFA data found for this user, default to 0 (not compliant)
-                    is_mfa_compliant = 0
-            else:
-                # Non-premium tenant (v1.0 only) - set MFA compliance to NULL (no access to MFA data)
-                is_mfa_compliant = None
-
-            # Get group count and admin status from pre-fetched results
-            is_admin, group_count = group_results.get(user_id, (False, 0))
-
-            # License processing moved to license_syncV2 for cleaner separation of concerns
-            # License sync will handle all user_license records completely
-
-            # Handle primary_email (required field)
-            primary_email = user.get("mail") or upn or "unknown@domain.com"
-
-            # Get password change date
-            last_password_change = user.get("lastPasswordChangeDateTime")
-
-            # Get created date
-            created_at = user.get("createdDateTime") or datetime.now().isoformat()
-
-            # Handle user properties - both premium and non-premium tenants can access these via v1.0
-            # Only MFA compliance and signin activity are restricted to premium tenants
-            department = user.get("department") or "N/A"
-            job_title = user.get("jobTitle") or "N/A"
-            office_location = user.get("officeLocation") or "N/A"
-            mobile_phone = user.get("mobilePhone") or "N/A"
-            account_type = user.get("userType") or "Member"
-
-            record = {
-                "user_id": user_id,
-                "tenant_id": tenant_id,
-                "user_principal_name": upn,
-                "primary_email": primary_email,
-                "display_name": display_name,
-                "department": department,
-                "job_title": job_title,
-                "office_location": office_location,
-                "mobile_phone": mobile_phone,
-                "account_type": account_type,
-                "account_enabled": 1 if user.get("accountEnabled") else 0,
-                "is_global_admin": 1 if is_admin else 0,
-                "is_mfa_compliant": is_mfa_compliant,  # Now uses the variable that can be NULL for non-premium
-                "license_count": license_count,
-                "group_count": group_count,
-                "last_sign_in_date": last_sign_in,
-                "last_password_change": last_password_change,
-                "created_at": created_at,
-                "last_updated": datetime.now().isoformat(),
-            }
-            records.append(record)
-
-        except Exception as e:
-            logger.error(f"Failed to process user {display_name}: {str(e)}")
-            # Add basic record
-            primary_email = user.get("mail") or upn or "unknown@domain.com"
-            created_at = user.get("createdDateTime") or datetime.now().isoformat()
-
-            # Handle user properties for basic record - both premium and non-premium tenants can access these
-            department = user.get("department") or "N/A"
-            job_title = user.get("jobTitle") or "N/A"
-            office_location = user.get("officeLocation") or "N/A"
-            mobile_phone = user.get("mobilePhone") or "N/A"
-            account_type = user.get("userType") or "Member"
-
-            basic_record = {
-                "user_id": user_id,
-                "tenant_id": tenant_id,
-                "user_principal_name": upn,
-                "primary_email": primary_email,
-                "display_name": display_name,
-                "department": department,
-                "job_title": job_title,
-                "office_location": office_location,
-                "mobile_phone": mobile_phone,
-                "account_type": account_type,
-                "account_enabled": 1 if user.get("accountEnabled") else 0,
-                "is_global_admin": 0,
-                "is_mfa_compliant": None if not is_premium else 0,  # NULL for v1.0 tenants, 0 for beta tenants with error
-                "license_count": 0,
-                "group_count": 0,
-                "last_sign_in_date": None if not is_premium else "1900-01-01",  # NULL for v1.0 tenants, default for beta tenants with error
-                "last_password_change": user.get("lastPasswordChangeDateTime"),
-                "created_at": created_at,
-                "last_updated": datetime.now().isoformat(),
-            }
-            records.append(basic_record)
-
-    logger.info(f"Transformation complete: {len(records)} users")
+    logger.info(f"Transformation complete: {len(records)} users in {(datetime.now() - start_time).total_seconds():.1f}s")
     return records  # Only return user records, license sync handles licenses
 
 

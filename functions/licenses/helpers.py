@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 from datetime import UTC, datetime, timedelta
 import logging
@@ -131,21 +132,24 @@ def fetch_users_with_licenses(tenant_id, use_beta=True):
         return []
 
 
-def fetch_user_license_details(tenant_id, user_id, use_beta=True):
-    """Fetch detailed license information for a specific user"""
+def fetch_user_license_details_batch(tenant_id, user, use_beta=True):
+    """Fetch detailed license information for a user (for concurrent processing)"""
+    user_id = user.get("id")
     try:
         if use_beta:
             graph = GraphBetaClient(tenant_id)
         else:
             graph = GraphClient(tenant_id)
 
-        return graph.get(
+        license_details = graph.get(
             f"/users/{user_id}/licenseDetails",
             select=["skuId", "skuPartNumber", "servicePlans"],
         )
+
+        return user_id, license_details or []
     except Exception as e:
         logger.warning(f"Failed to fetch license details for user {user_id}: {str(e)}")
-        return []
+        return user_id, []
 
 
 def fetch_tenant_subscriptions(tenant_id, use_beta=True):
@@ -227,16 +231,43 @@ def sync_licenses_v2(tenant_id, tenant_name):
         user_license_records = []
         users_with_licenses = 0
 
-        for user in all_users:
-            user_id = user.get("id")
-            upn = user.get("userPrincipalName")
-            assigned_licenses = user.get("assignedLicenses", [])
-            user_account_enabled = user.get("accountEnabled", True)
+        # Filter users with licenses for concurrent processing
+        users_with_licenses_list = [user for user in all_users if user.get("assignedLicenses")]
+        users_with_licenses = len(users_with_licenses_list)
 
-            if assigned_licenses:
-                users_with_licenses += 1
-                detailed_licenses = fetch_user_license_details(tenant_id, user_id, is_premium)
-                license_detail_lookup = {lic["skuId"]: lic for lic in detailed_licenses}
+        if users_with_licenses_list:
+            logger.info(f"Starting concurrent processing of {users_with_licenses} users with licenses...")
+
+            # Use ThreadPoolExecutor to fetch license details concurrently
+            with ThreadPoolExecutor(max_workers=15) as executor:
+                future_to_user = {
+                    executor.submit(fetch_user_license_details_batch, tenant_id, user, is_premium): user
+                    for user in users_with_licenses_list
+                }
+
+                processed_count = 0
+                license_details_lookup = {}
+
+                for future in as_completed(future_to_user):
+                    user = future_to_user[future]
+                    try:
+                        user_id, detailed_licenses = future.result()
+                        license_details_lookup[user_id] = {lic["skuId"]: lic for lic in detailed_licenses}
+                    except Exception as e:
+                        logger.warning(f"Failed to process license details for user {user.get('id', 'unknown')}: {str(e)}")
+                        continue
+
+                    processed_count += 1
+                    if processed_count % 50 == 0 or processed_count == users_with_licenses:
+                        logger.info(f"Processed {processed_count}/{users_with_licenses} users with licenses...")
+
+            # Now process all users with their license details
+            for user in users_with_licenses_list:
+                user_id = user.get("id")
+                upn = user.get("userPrincipalName")
+                assigned_licenses = user.get("assignedLicenses", [])
+                user_account_enabled = user.get("accountEnabled", True)
+                license_detail_lookup = license_details_lookup.get(user_id, {})
 
                 for assigned_license in assigned_licenses:
                     sku_id = assigned_license.get("skuId")
@@ -325,6 +356,7 @@ def sync_licenses_v2(tenant_id, tenant_name):
             "status": "success",
             "licenses_synced": len(license_records) if "license_records" in locals() else 0,
             "user_licenses_replaced": len(user_license_records),
+            "users_with_licenses_processed": users_with_licenses,
             "inactive_licenses_updated": len(users_to_check) if users_to_check else 0,
         }
 
@@ -336,11 +368,12 @@ def sync_licenses_v2(tenant_id, tenant_name):
 
 
 def sync_subscriptions(tenant_id, tenant_name):
-    """Sync tenant subscriptions"""
+    """Sync tenant subscriptions with optimized processing"""
     init_schema()
 
     try:
         logger.info(f"Starting subscription sync for {tenant_name}")
+        start_time = datetime.now()
 
         # Detect tenant capabilities
         is_premium = detect_tenant_capabilities(tenant_id)
@@ -348,9 +381,25 @@ def sync_subscriptions(tenant_id, tenant_name):
         # Fetch tenant subscriptions
         tenant_subscriptions = fetch_tenant_subscriptions(tenant_id, is_premium)
 
-        if tenant_subscriptions:
-            subscription_records = []
-            for subscription in tenant_subscriptions:
+        if not tenant_subscriptions:
+            logger.warning(f"No subscriptions found for tenant {tenant_id}")
+            return {
+                "status": "completed",
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "subscriptions_synced": 0,
+                "duration_seconds": (datetime.now() - start_time).total_seconds(),
+            }
+
+        logger.info(f"Processing {len(tenant_subscriptions)} subscriptions...")
+
+        # Process subscriptions with better error handling
+        subscription_records = []
+        processed_count = 0
+        failed_count = 0
+
+        for subscription in tenant_subscriptions:
+            try:
                 subscription_data = {
                     "tenant_id": tenant_id,
                     "subscription_id": subscription.get("id"),
@@ -365,15 +414,51 @@ def sync_subscriptions(tenant_id, tenant_name):
                     "last_updated": datetime.now().isoformat(),
                 }
                 subscription_records.append(subscription_data)
+                processed_count += 1
 
-            if subscription_records:
-                upsert_many("subscriptions", subscription_records)
-                logger.info(f"Stored {len(subscription_records)} subscriptions")
+                # Log progress every 100 subscriptions
+                if processed_count % 100 == 0:
+                    logger.info(f"Processed {processed_count}/{len(tenant_subscriptions)} subscriptions...")
+
+            except Exception as e:
+                failed_count += 1
+                logger.warning(f"Failed to process subscription {subscription.get('id', 'unknown')}: {str(e)}")
+                continue
+
+        # Store subscriptions using DELETE + INSERT approach for better performance
+        if subscription_records:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM subscriptions WHERE tenant_id = ?", (tenant_id,))
+            conn.commit()
+            conn.close()
+
+            upsert_many("subscriptions", subscription_records)
+            logger.info(f"Stored {len(subscription_records)} subscriptions")
 
         # Count total subscriptions after sync
         total_subscriptions = query("SELECT COUNT(*) as total FROM subscriptions WHERE tenant_id = ?", (tenant_id,))[0]["total"]
 
-        return {"status": "success", "subscriptions_synced": total_subscriptions}
+        duration = (datetime.now() - start_time).total_seconds()
+
+        # Log final summary
+        logger.info(f"=== SUBSCRIPTION SYNC SUMMARY FOR {tenant_name} ===")
+        logger.info(f"Subscriptions processed: {processed_count}")
+        logger.info(f"Subscriptions failed: {failed_count}")
+        logger.info(f"Subscriptions stored: {len(subscription_records)}")
+        logger.info(f"Total subscriptions in database: {total_subscriptions}")
+        logger.info(f"Duration: {duration:.2f} seconds")
+        logger.info("=" * 50)
+
+        return {
+            "status": "success",
+            "tenant_id": tenant_id,
+            "tenant_name": tenant_name,
+            "subscriptions_synced": total_subscriptions,
+            "subscriptions_processed": processed_count,
+            "subscriptions_failed": failed_count,
+            "duration_seconds": duration,
+        }
 
     except Exception as e:
         error_msg = clean_error_message(str(e), tenant_name=tenant_name)

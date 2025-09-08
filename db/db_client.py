@@ -194,20 +194,26 @@ def init_schema():
                 device_id TEXT(255) NOT NULL,
                 device_name TEXT(255),
                 model TEXT(100),
-                serial_number TEXT(100),
                 operating_system TEXT(100),
                 os_version TEXT(100),
                 device_ownership TEXT(50),
                 is_compliant INTEGER DEFAULT 0,
                 is_managed INTEGER DEFAULT 0,
                 manufacturer TEXT(100),
-                total_storage TEXT(50),
-                free_storage TEXT(50),
-                physical_memory TEXT(50),
                 compliance_state TEXT(50),
-                is_encrypted INTEGER DEFAULT 0,
-                last_sign_in_date TEXT, -- ISO datetime format
-                enrolled_date TEXT, -- ISO datetime format
+                last_sign_in_date TEXT, -- Moved before created_at for better visibility
+                
+                -- Additional fields from Azure AD API:
+                account_enabled INTEGER DEFAULT 1,
+                compliance_expiration_date TEXT, -- ISO datetime format
+                device_version TEXT(50),
+                is_rooted INTEGER DEFAULT 0,
+                mdm_app_id TEXT(255),
+                profile_type TEXT(50),
+                trust_type TEXT(50),
+                on_premises_sync_enabled INTEGER DEFAULT 0,
+                on_premises_last_sync_date TEXT, -- ISO datetime format
+                
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 last_updated TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (tenant_id, device_id)
@@ -223,7 +229,7 @@ def init_schema():
                 device_id TEXT(255) NOT NULL,
                 device_name TEXT(255),
                 model TEXT(100),
-                serial_number TEXT(100),
+                serial_number TEXT(100),  -- Keep for Intune devices
                 operating_system TEXT(100),
                 os_version TEXT(100),
                 device_ownership TEXT(50),
@@ -232,11 +238,10 @@ def init_schema():
                 manufacturer TEXT(100),
                 total_storage_gb REAL, -- Storage in GB for proper sorting
                 free_storage_gb REAL,  -- Storage in GB for proper sorting
-                physical_memory_gb REAL, -- Memory in GB for proper sorting
                 compliance_state TEXT(50),
-                is_encrypted INTEGER DEFAULT 0,
+                is_encrypted INTEGER DEFAULT 0,  -- Keep for Intune devices
                 last_sign_in_date TEXT, -- ISO datetime format
-                enrolled_date TEXT, -- ISO datetime format
+                enrolled_date TEXT, -- Keep for Intune devices
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 last_updated TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (tenant_id, device_id)

@@ -1,7 +1,7 @@
 import azure.functions as func
 from dotenv import load_dotenv
 
-from functions.devices.http import get_devices, http_devices_sync
+from functions.devices.http import get_devices, http_azure_devices_sync, http_devices_sync
 from functions.devices.timer import timer_devices_sync
 from functions.groups.http import get_groups, http_group_sync
 from functions.groups.timer import timer_groups_sync
@@ -78,6 +78,7 @@ app.route(route="sync/groups", methods=["POST"])(http_group_sync)
 app.route(route="sync/subscriptions", methods=["POST"])(http_subscription_sync)
 
 app.route(route="sync/devices", methods=["POST"])(http_devices_sync)
+app.route(route="sync/azure-devices", methods=["POST"])(http_azure_devices_sync)
 
 # User Management Endpoints
 app.route(route="tenant/users/{user_id}", methods=["GET"])(get_user)

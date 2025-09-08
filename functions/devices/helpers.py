@@ -326,11 +326,9 @@ def transform_azure_devices(devices, tenant_id):
 
             # Handle additional fields for Azure devices
             manufacturer = device.get("manufacturer") or "N/A"
-            compliance_state = "unknown"  # Azure devices don't have detailed compliance state
 
             # Handle dates
             last_sign_in_date = device.get("approximateLastSignInDateTime")
-            compliance_expiration_date = device.get("complianceExpirationDateTime")
             on_premises_last_sync_date = device.get("onPremisesLastSyncDateTime")
 
             # Handle new Azure AD API fields
@@ -353,11 +351,8 @@ def transform_azure_devices(devices, tenant_id):
                 "is_compliant": is_compliant,
                 "is_managed": is_managed,
                 "manufacturer": manufacturer,
-                "compliance_state": compliance_state,
-                "last_sign_in_date": last_sign_in_date,
                 # New Azure AD API fields
                 "account_enabled": account_enabled,
-                "compliance_expiration_date": compliance_expiration_date,
                 "device_version": device_version,
                 "is_rooted": is_rooted,
                 "mdm_app_id": mdm_app_id,
@@ -365,6 +360,7 @@ def transform_azure_devices(devices, tenant_id):
                 "trust_type": trust_type,
                 "on_premises_sync_enabled": on_premises_sync_enabled,
                 "on_premises_last_sync_date": on_premises_last_sync_date,
+                "last_sign_in_date": last_sign_in_date,  # Moved to third-to-last position
                 "created_at": datetime.now().isoformat(),
                 "last_updated": datetime.now().isoformat(),
                 # Store original device ID for fetching registered users

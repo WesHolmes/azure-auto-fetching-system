@@ -200,12 +200,9 @@ def init_schema():
                 is_compliant INTEGER DEFAULT 0,
                 is_managed INTEGER DEFAULT 0,
                 manufacturer TEXT(100),
-                compliance_state TEXT(50),
-                last_sign_in_date TEXT, -- Moved before created_at for better visibility
                 
                 -- Additional fields from Azure AD API:
                 account_enabled INTEGER DEFAULT 1,
-                compliance_expiration_date TEXT, -- ISO datetime format
                 device_version TEXT(50),
                 is_rooted INTEGER DEFAULT 0,
                 mdm_app_id TEXT(255),
@@ -213,6 +210,7 @@ def init_schema():
                 trust_type TEXT(50),
                 on_premises_sync_enabled INTEGER DEFAULT 0,
                 on_premises_last_sync_date TEXT, -- ISO datetime format
+                last_sign_in_date TEXT, -- Moved to third-to-last position (left of created_at)
                 
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 last_updated TEXT NOT NULL DEFAULT (datetime('now')),

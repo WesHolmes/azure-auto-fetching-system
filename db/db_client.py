@@ -186,13 +186,12 @@ def init_schema():
         """
         )
 
-        # Devices table (tenant-level device definitions)
+        # Azure devices table (tenant-level Azure AD device definitions)
         cursor.execute(
             """
-            CREATE TABLE IF NOT EXISTS devices (
+            CREATE TABLE IF NOT EXISTS azure_devices (
                 tenant_id TEXT(50) NOT NULL,
                 device_id TEXT(255) NOT NULL,
-                device_type TEXT(50) NOT NULL,
                 device_name TEXT(255),
                 model TEXT(100),
                 serial_number TEXT(100),
@@ -205,6 +204,35 @@ def init_schema():
                 total_storage TEXT(50),
                 free_storage TEXT(50),
                 physical_memory TEXT(50),
+                compliance_state TEXT(50),
+                is_encrypted INTEGER DEFAULT 0,
+                last_sign_in_date TEXT, -- ISO datetime format
+                enrolled_date TEXT, -- ISO datetime format
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (tenant_id, device_id)
+            )
+        """
+        )
+
+        # Intune devices table (tenant-level Intune device definitions)
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS intune_devices (
+                tenant_id TEXT(50) NOT NULL,
+                device_id TEXT(255) NOT NULL,
+                device_name TEXT(255),
+                model TEXT(100),
+                serial_number TEXT(100),
+                operating_system TEXT(100),
+                os_version TEXT(100),
+                device_ownership TEXT(50),
+                is_compliant INTEGER DEFAULT 0,
+                is_managed INTEGER DEFAULT 0,
+                manufacturer TEXT(100),
+                total_storage_gb REAL, -- Storage in GB for proper sorting
+                free_storage_gb REAL,  -- Storage in GB for proper sorting
+                physical_memory_gb REAL, -- Memory in GB for proper sorting
                 compliance_state TEXT(50),
                 is_encrypted INTEGER DEFAULT 0,
                 last_sign_in_date TEXT, -- ISO datetime format
@@ -241,8 +269,8 @@ def init_schema():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_tenant ON user_groupsV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_user ON user_groupsV2(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_groupsV2_group ON user_groupsV2(group_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_tenant ON devices(tenant_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_devices_type ON devices(device_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_azure_devices_tenant ON azure_devices(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_intune_devices_tenant ON intune_devices(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_devicesV2_tenant ON user_devicesV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_devicesV2_user ON user_devicesV2(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_devicesV2_device ON user_devicesV2(device_id)")

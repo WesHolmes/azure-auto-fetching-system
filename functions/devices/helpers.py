@@ -39,6 +39,21 @@ def format_bytes(bytes_value):
     return "0 B"
 
 
+def bytes_to_gb(bytes_value):
+    """Convert bytes to GB as a float for database storage and sorting"""
+    if bytes_value is None or bytes_value == 0:
+        return None
+
+    try:
+        bytes_value = int(bytes_value)
+        if bytes_value < 0:
+            return None
+        # Convert to GB
+        return round(bytes_value / (1024**3), 2)
+    except (ValueError, TypeError):
+        return None
+
+
 def _test_tenant_capability(graph, graph_beta, tenant_id):
     """Helper function to test tenant capability for premium features"""
     try:
@@ -75,6 +90,7 @@ def fetch_intune_devices(tenant_id):
         logger.info(f"Starting Intune device fetch for tenant {tenant_id}")
         graph = GraphBetaClient(tenant_id)
 
+        # First, get the list of devices
         devices = graph.get(
             "/deviceManagement/managedDevices",
             select=[
@@ -93,13 +109,56 @@ def fetch_intune_devices(tenant_id):
                 "manufacturer",  # Additional Intune fields
                 "totalStorageSpaceInBytes",
                 "freeStorageSpaceInBytes",
-                "physicalMemoryInBytes",
                 "complianceState",
             ],
             top=999,
         )
 
         logger.info(f"Successfully fetched {len(devices)} Intune devices for tenant {tenant_id}")
+
+        # Now fetch physical memory for each device individually
+        # This is required because physicalMemoryInBytes only returns real values in individual GET calls
+        logger.info(f"Fetching physical memory data for {len(devices)} devices...")
+        for i, device in enumerate(devices):
+            try:
+                device_id = device.get("id")
+                if device_id:
+                    # Make individual GET request for hardware information
+                    # Microsoft Graph API has a known issue where physicalMemoryInBytes returns 0
+                    # We need to use the hardwareInformation endpoint instead
+                    device_details = graph.get(f"/deviceManagement/managedDevices/{device_id}", select=["hardwareInformation"])
+
+                    # Debug: Log the response type and content for troubleshooting
+                    logger.debug(f"Device {device.get('deviceName', 'Unknown')} response type: {type(device_details)}")
+                    logger.debug(f"Device {device.get('deviceName', 'Unknown')} response content: {device_details}")
+
+                    # Handle different response types - sometimes Graph API returns a list
+                    if isinstance(device_details, list):
+                        if device_details and len(device_details) > 0:
+                            device_details = device_details[0]  # Take the first item if it's a list
+                        else:
+                            device_details = {}
+                    elif not isinstance(device_details, dict):
+                        logger.warning(f"Unexpected response type for device {device.get('deviceName', 'Unknown')}: {type(device_details)}")
+                        device_details = {}
+
+                    # Extract physical memory from hardwareInformation
+                    hardware_info = device_details.get("hardwareInformation", {}) if device_details else {}
+                    physical_memory = hardware_info.get("totalMemoryInBytes") if hardware_info else None
+                    device["physicalMemoryInBytes"] = physical_memory
+
+                    # Log the physical memory value for debugging
+                    logger.debug(f"Device {device.get('deviceName', 'Unknown')} physical memory: {physical_memory}")
+
+                    if (i + 1) % 50 == 0:  # Log progress every 50 devices
+                        logger.info(f"Processed physical memory for {i + 1}/{len(devices)} devices")
+
+            except Exception as e:
+                logger.warning(f"Failed to fetch physical memory for device {device.get('deviceName', 'Unknown')}: {str(e)}")
+                device["physicalMemoryInBytes"] = None
+                continue
+
+        logger.info("Completed fetching physical memory data for all devices")
 
         # Debug: Log sample device data to see what fields are available
         if devices:
@@ -165,7 +224,7 @@ def fetch_azure_device_registered_users(tenant_id, device_id):
 
 
 def transform_intune_devices(devices, tenant_id):
-    """Transform Intune devices to database records"""
+    """Transform Intune devices to database records for intune_devices table"""
     records = []
 
     for device in devices:
@@ -194,29 +253,50 @@ def transform_intune_devices(devices, tenant_id):
             # Handle storage and memory fields
             manufacturer = device.get("manufacturer") or "N/A"
 
-            # Debug logging for storage fields
+            # Get raw byte values
             total_storage_bytes = device.get("totalStorageSpaceInBytes")
             free_storage_bytes = device.get("freeStorageSpaceInBytes")
             physical_memory_bytes = device.get("physicalMemoryInBytes")
             is_encrypted_raw = device.get("isEncrypted")
 
+            # Debug logging for storage fields
             logger.debug(
                 f"Device {device_name} storage data: total={total_storage_bytes}, free={free_storage_bytes}, memory={physical_memory_bytes}, encrypted={is_encrypted_raw}"
             )
 
-            total_storage = format_bytes(total_storage_bytes)
-            free_storage = format_bytes(free_storage_bytes)
-            physical_memory = format_bytes(physical_memory_bytes)
+            # Convert to GB for proper database sorting
+            total_storage_gb = bytes_to_gb(total_storage_bytes)
+            free_storage_gb = bytes_to_gb(free_storage_bytes)
+            physical_memory_gb = bytes_to_gb(physical_memory_bytes)
             is_encrypted = 1 if is_encrypted_raw else 0
 
-            # Handle dates
+            # Handle dates - ensure proper ISO format
             enrolled_date = device.get("enrolledDateTime")
             last_sign_in_date = device.get("lastSyncDateTime")  # Use last sync as proxy for activity
+
+            # Convert dates to proper ISO format if they exist
+            if enrolled_date and not enrolled_date.endswith("Z"):
+                # Ensure proper ISO format
+                try:
+                    from datetime import datetime
+
+                    if "T" in enrolled_date:
+                        enrolled_date = enrolled_date + "Z" if not enrolled_date.endswith("Z") else enrolled_date
+                except Exception:
+                    enrolled_date = None
+
+            if last_sign_in_date and not last_sign_in_date.endswith("Z"):
+                try:
+                    from datetime import datetime
+
+                    if "T" in last_sign_in_date:
+                        last_sign_in_date = last_sign_in_date + "Z" if not last_sign_in_date.endswith("Z") else last_sign_in_date
+                except Exception:
+                    last_sign_in_date = None
 
             record = {
                 "tenant_id": tenant_id,
                 "device_id": device_id,
-                "device_type": "Intune",
                 "device_name": device_name,
                 "model": model,
                 "serial_number": serial_number,
@@ -226,9 +306,9 @@ def transform_intune_devices(devices, tenant_id):
                 "is_compliant": is_compliant,
                 "is_managed": is_managed,
                 "manufacturer": manufacturer,
-                "total_storage": total_storage,
-                "free_storage": free_storage,
-                "physical_memory": physical_memory,
+                "total_storage_gb": total_storage_gb,
+                "free_storage_gb": free_storage_gb,
+                "physical_memory_gb": physical_memory_gb,
                 "compliance_state": compliance_state,
                 "is_encrypted": is_encrypted,
                 "last_sign_in_date": last_sign_in_date,
@@ -434,20 +514,7 @@ def sync_devices(tenant_id, tenant_name):
                 logger.error(f"Failed to sync Intune devices for {tenant_name}: {str(e)}")
                 # Continue with Azure sync even if Intune fails
 
-        # Sync Azure devices (all tenants)
-        try:
-            logger.info(f"Syncing Azure devices for tenant {tenant_name}")
-            azure_devices = fetch_azure_devices(tenant_id)
-            if azure_devices:
-                azure_records = transform_azure_devices(azure_devices, tenant_id)
-                all_device_records.extend(azure_records)
-                logger.info(f"Processed {len(azure_records)} Azure devices")
-            else:
-                logger.info(f"No Azure devices found for {tenant_name}")
-
-        except Exception as e:
-            logger.error(f"Failed to sync Azure devices for {tenant_name}: {str(e)}")
-            # If both fail, we'll have an empty result
+        # Note: Azure devices are now handled separately - this function only handles Intune devices
 
         if not all_device_records:
             logger.warning(f"No devices found for {tenant_name}")
@@ -476,8 +543,8 @@ def sync_devices(tenant_id, tenant_name):
 
         try:
             if clean_device_records:
-                devices_stored = upsert_many("devices", clean_device_records)
-                logger.info(f"Stored {devices_stored} devices for {tenant_name}")
+                devices_stored = upsert_many("intune_devices", clean_device_records)
+                logger.info(f"Stored {devices_stored} Intune devices for {tenant_name}")
 
             if all_relationship_records:
                 relationships_stored = upsert_many("user_devicesV2", all_relationship_records)

@@ -112,11 +112,11 @@ def get_devices(req: func.HttpRequest) -> func.HttpResponse:
             SELECT d.*,
                    COUNT(DISTINCT ud.user_id) as user_count,
                    SUM(CASE WHEN ud.relationship_type = 'owner' THEN 1 ELSE 0 END) as owner_count
-            FROM devices d
+            FROM intune_devices d
             LEFT JOIN user_devicesV2 ud ON d.tenant_id = ud.tenant_id AND d.device_id = ud.device_id
             WHERE d.tenant_id = ?
             GROUP BY d.device_id, d.tenant_id
-            ORDER BY d.device_type, d.device_name
+            ORDER BY d.device_name
         """
 
         devices = query(devices_query, (tenant_id,))

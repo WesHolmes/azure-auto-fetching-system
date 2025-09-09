@@ -262,6 +262,30 @@ def init_schema():
         """
         )
 
+        # Backup Radar table - stores historical backup job statuses
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS backup_radar (
+                tenant_id TEXT(50) NOT NULL,
+                backup_id INTEGER NOT NULL,
+                backup_datetime DATETIME NOT NULL,
+                company_name TEXT,
+                device_name TEXT,
+                device_type TEXT,
+                days_since_last_good_result DECIMAL(10, 2),
+                days_since_last_result DECIMAL(10, 2),
+                days_in_status DECIMAL(10, 2),
+                is_verified INTEGER DEFAULT 0,
+                backup_result TEXT,
+                backup_type TEXT,
+                backup_policy_name TEXT,
+                is_retired INTEGER DEFAULT 0,
+                updated_at DATETIME DEFAULT (datetime('now', 'utc')),
+                PRIMARY KEY (tenant_id, backup_id, backup_datetime)
+            )
+        """
+        )
+
         # Basic indexes only - V2 tables
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_usersV2_tenant ON usersV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_licenses_tenant ON licenses(tenant_id)")
@@ -277,6 +301,11 @@ def init_schema():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_devicesV2_tenant ON user_devicesV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_devicesV2_user ON user_devicesV2(user_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_devicesV2_device ON user_devicesV2(device_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_backup_radar_tenant ON backup_radar(tenant_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_backup_radar_company ON backup_radar(company_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_backup_radar_datetime ON backup_radar(backup_datetime)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_backup_radar_device ON backup_radar(device_name, backup_datetime)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_backup_radar_tenant_company ON backup_radar(tenant_id, company_name)")
 
         conn.commit()
         logger.info("Database schema initialized")

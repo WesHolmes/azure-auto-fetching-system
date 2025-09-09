@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 import logging
 from typing import Any
@@ -138,6 +139,59 @@ def map_backup_data(backup_item: dict[str, Any], tenant_id: str, is_retired: boo
     return mapped_data
 
 
+def process_backup_batch(
+    backup_items: list[dict[str, Any]], tenants: list[dict[str, Any]], is_retired: bool = False
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Process a batch of backup items concurrently.
+    Returns (mapped_data, errors).
+    """
+    mapped_data = []
+    errors = []
+
+    def process_single_backup(backup_item):
+        """Process a single backup item"""
+        try:
+            company_name = backup_item.get("companyName")
+            tenant_id = get_tenant_id_from_company_name(company_name, tenants)
+            mapped_item = map_backup_data(backup_item, tenant_id, is_retired)
+            return mapped_item, None
+        except Exception as e:
+            error_msg = f"Error processing {'retired' if is_retired else 'active'} backup {backup_item.get('backupId', 'unknown')}: {clean_error_message(str(e))}"
+            return None, {
+                "type": "error",
+                "message": error_msg,
+                "backup_id": backup_item.get("backupId"),
+                "company_name": backup_item.get("companyName"),
+            }
+
+    # Use ThreadPoolExecutor for concurrent processing
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_backup = {executor.submit(process_single_backup, backup_item): backup_item for backup_item in backup_items}
+
+        processed_count = 0
+        total_backups = len(backup_items)
+
+        for future in as_completed(future_to_backup):
+            backup_item = future_to_backup[future]
+            try:
+                mapped_item, error = future.result()
+                if mapped_item:
+                    mapped_data.append(mapped_item)
+                if error:
+                    errors.append(error)
+            except Exception as e:
+                logger.warning(f"Failed to process backup {backup_item.get('backupId', 'unknown')}: {str(e)}")
+                continue
+
+            processed_count += 1
+            if processed_count % 50 == 0 or processed_count == total_backups:
+                backup_type = "retired" if is_retired else "active"
+                logger.info(f"Processed {processed_count}/{total_backups} {backup_type} backup records...")
+
+    return mapped_data, errors
+
+
 def sync_backup_radar_data(tenants: list[dict[str, Any]], days_back: int = 7) -> dict[str, Any]:
     """
     Sync Backup Radar data for all tenants.
@@ -161,56 +215,22 @@ def sync_backup_radar_data(tenants: list[dict[str, Any]], days_back: int = 7) ->
         retired_backups_response = get_backup_retired()
         retired_backups = retired_backups_response.get("Results", [])
 
-        # Process active backups
+        # Process active backups concurrently
         if active_backups:
-            logger.info(f"Processing {len(active_backups)} active backup records")
-            active_mapped_data = []
-
-            for backup_item in active_backups:
-                try:
-                    company_name = backup_item.get("companyName")
-                    tenant_id = get_tenant_id_from_company_name(company_name, tenants)
-                    mapped_data = map_backup_data(backup_item, tenant_id, is_retired=False)
-                    active_mapped_data.append(mapped_data)
-                except Exception as e:
-                    error_msg = f"Error processing active backup {backup_item.get('backupId', 'unknown')}: {clean_error_message(str(e))}"
-                    logger.error(error_msg)
-                    sync_results.append(
-                        {
-                            "type": "error",
-                            "message": error_msg,
-                            "backup_id": backup_item.get("backupId"),
-                            "company_name": backup_item.get("companyName"),
-                        }
-                    )
+            logger.info(f"Processing {len(active_backups)} active backup records concurrently...")
+            active_mapped_data, active_errors = process_backup_batch(active_backups, tenants, is_retired=False)
+            sync_results.extend(active_errors)
 
             if active_mapped_data:
                 upsert_many("backup_radar", active_mapped_data)
                 total_active_backups = len(active_mapped_data)
                 logger.info(f"Successfully synced {total_active_backups} active backup records")
 
-        # Process retired backups
+        # Process retired backups concurrently
         if retired_backups:
-            logger.info(f"Processing {len(retired_backups)} retired backup records")
-            retired_mapped_data = []
-
-            for backup_item in retired_backups:
-                try:
-                    company_name = backup_item.get("companyName")
-                    tenant_id = get_tenant_id_from_company_name(company_name, tenants)
-                    mapped_data = map_backup_data(backup_item, tenant_id, is_retired=True)
-                    retired_mapped_data.append(mapped_data)
-                except Exception as e:
-                    error_msg = f"Error processing retired backup {backup_item.get('backupId', 'unknown')}: {clean_error_message(str(e))}"
-                    logger.error(error_msg)
-                    sync_results.append(
-                        {
-                            "type": "error",
-                            "message": error_msg,
-                            "backup_id": backup_item.get("backupId"),
-                            "company_name": backup_item.get("companyName"),
-                        }
-                    )
+            logger.info(f"Processing {len(retired_backups)} retired backup records concurrently...")
+            retired_mapped_data, retired_errors = process_backup_batch(retired_backups, tenants, is_retired=True)
+            sync_results.extend(retired_errors)
 
             if retired_mapped_data:
                 upsert_many("backup_radar", retired_mapped_data)

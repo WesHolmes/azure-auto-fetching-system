@@ -59,10 +59,11 @@ def get_tenant_id_from_company_name(company_name: str, tenants: list[dict[str, A
     return "unknown"
 
 
-# accepts to list of backup devices (all and retired) and performs a lookup on whether the backup id exists in the retired list if so, set is_retired to 1 (True)
-def map_backup_data(backup_item: dict[str, Any], tenant_id: str, is_retired: bool = False) -> dict[str, Any]:
+def map_backup_data_unified(backup_item: dict[str, Any], tenant_id: str, retired_backup_ids: set[int]) -> dict[str, Any]:
     """
-    Map Backup Radar API data to database schema.
+    Map Backup Radar API data to database schema with unified retired status lookup.
+    Accepts a list of backup devices (all and retired) and performs a lookup on whether
+    the backup id exists in the retired list - if so, sets is_retired to 1 (True).
     """
     # Extract nested values safely
     status_name = backup_item.get("status", {}).get("name", "") if backup_item.get("status") else ""
@@ -136,10 +137,14 @@ def map_backup_data(backup_item: dict[str, Any], tenant_id: str, is_retired: boo
         # Fallback to current time if no lastResult
         backup_datetime = datetime.now(UTC).isoformat()
 
+    # Determine if this backup is retired by looking up its ID in the retired set
+    backup_id = backup_item.get("backupId")
+    is_retired = backup_id in retired_backup_ids if backup_id is not None else False
+
     # Map the data according to the schema
     mapped_data = {
         "tenant_id": tenant_id,
-        "backup_id": backup_item.get("backupId"),
+        "backup_id": backup_id,
         "backup_datetime": backup_datetime,
         "company_name": backup_item.get("companyName"),
         "device_name": backup_item.get("deviceName"),
@@ -157,25 +162,25 @@ def map_backup_data(backup_item: dict[str, Any], tenant_id: str, is_retired: boo
     return mapped_data
 
 
-def process_backup_batch(
-    backup_items: list[dict[str, Any]], tenants: list[dict[str, Any]], is_retired: bool = False
+def process_backup_batch_unified(
+    all_backup_items: list[dict[str, Any]], tenants: list[dict[str, Any]], retired_backup_ids: set[int]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
-    Process a batch of backup items concurrently.
+    Process all backup items (active and retired) concurrently with unified retired status lookup.
     Returns (mapped_data, errors).
     """
     mapped_data = []
     errors = []
 
     def process_single_backup(backup_item):
-        """Process a single backup item"""
+        """Process a single backup item with unified retired status lookup"""
         try:
             company_name = backup_item.get("companyName")
             tenant_id = get_tenant_id_from_company_name(company_name, tenants)
-            mapped_item = map_backup_data(backup_item, tenant_id, is_retired)
+            mapped_item = map_backup_data_unified(backup_item, tenant_id, retired_backup_ids)
             return mapped_item, None
         except Exception as e:
-            error_msg = f"Error processing {'retired' if is_retired else 'active'} backup {backup_item.get('backupId', 'unknown')}: {clean_error_message(str(e))}"
+            error_msg = f"Error processing backup {backup_item.get('backupId', 'unknown')}: {clean_error_message(str(e))}"
             return None, {
                 "type": "error",
                 "message": error_msg,
@@ -185,10 +190,10 @@ def process_backup_batch(
 
     # Use ThreadPoolExecutor for concurrent processing
     with ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_backup = {executor.submit(process_single_backup, backup_item): backup_item for backup_item in backup_items}
+        future_to_backup = {executor.submit(process_single_backup, backup_item): backup_item for backup_item in all_backup_items}
 
         processed_count = 0
-        total_backups = len(backup_items)
+        total_backups = len(all_backup_items)
 
         for future in as_completed(future_to_backup):
             backup_item = future_to_backup[future]
@@ -204,8 +209,7 @@ def process_backup_batch(
 
             processed_count += 1
             if processed_count % 50 == 0 or processed_count == total_backups:
-                backup_type = "retired" if is_retired else "active"
-                logger.info(f"Processed {processed_count}/{total_backups} {backup_type} backup records...")
+                logger.info(f"Processed {processed_count}/{total_backups} backup records...")
 
     return mapped_data, errors
 
@@ -233,27 +237,27 @@ def sync_backup_radar_data(tenants: list[dict[str, Any]], days_back: int = 7) ->
         retired_backups_response = get_backup_retired()
         retired_backups = retired_backups_response.get("Results", [])
 
-        # Process active backups concurrently
-        if active_backups:
-            logger.info(f"Processing {len(active_backups)} active backup records concurrently...")
-            active_mapped_data, active_errors = process_backup_batch(active_backups, tenants, is_retired=False)
-            sync_results.extend(active_errors)
+        # Create set of retired backup IDs for efficient lookup
+        retired_backup_ids = {backup.get("backupId") for backup in retired_backups if backup.get("backupId") is not None}
+        logger.info(f"Found {len(retired_backup_ids)} retired backup IDs for lookup")
 
-            if active_mapped_data:
-                upsert_many("backup_radar", active_mapped_data)
-                total_active_backups = len(active_mapped_data)
-                logger.info(f"Successfully synced {total_active_backups} active backup records")
+        # Combine all backups (active + retired) for unified processing
+        all_backups = active_backups + retired_backups
+        logger.info(f"Processing {len(all_backups)} total backup records (active + retired) with unified retired status lookup...")
 
-        # Process retired backups concurrently
-        if retired_backups:
-            logger.info(f"Processing {len(retired_backups)} retired backup records concurrently...")
-            retired_mapped_data, retired_errors = process_backup_batch(retired_backups, tenants, is_retired=True)
-            sync_results.extend(retired_errors)
+        if all_backups:
+            # Process all backups concurrently with unified retired status lookup
+            all_mapped_data, all_errors = process_backup_batch_unified(all_backups, tenants, retired_backup_ids)
+            sync_results.extend(all_errors)
 
-            if retired_mapped_data:
-                upsert_many("backup_radar", retired_mapped_data)
-                total_retired_backups = len(retired_mapped_data)
-                logger.info(f"Successfully synced {total_retired_backups} retired backup records")
+            if all_mapped_data:
+                upsert_many("backup_radar", all_mapped_data)
+
+                # Count active vs retired from the processed data
+                total_active_backups = sum(1 for item in all_mapped_data if item.get("is_retired") == 0)
+                total_retired_backups = sum(1 for item in all_mapped_data if item.get("is_retired") == 1)
+
+                logger.info(f"Successfully synced {total_active_backups} active and {total_retired_backups} retired backup records")
 
         # Calculate summary
         end_time = datetime.now()
@@ -317,35 +321,32 @@ def sync_backup_radar_for_tenant(tenant_id: str, tenants: list[dict[str, Any]], 
         retired_backups_response = get_backup_retired()
         retired_backups = retired_backups_response.get("Results", [])
 
+        # Create set of retired backup IDs for efficient lookup
+        retired_backup_ids = {backup.get("backupId") for backup in retired_backups if backup.get("backupId") is not None}
+
         # Filter backups for this tenant's company
         company_name = tenant.get("display_name")
         tenant_active_backups = [b for b in active_backups if b.get("companyName") == company_name]
         tenant_retired_backups = [b for b in retired_backups if b.get("companyName") == company_name]
 
+        # Combine all tenant backups for unified processing
+        all_tenant_backups = tenant_active_backups + tenant_retired_backups
         total_active = 0
         total_retired = 0
 
-        # Process active backups for this tenant
-        if tenant_active_backups:
-            active_mapped_data = []
-            for backup_item in tenant_active_backups:
-                mapped_data = map_backup_data(backup_item, tenant_id, is_retired=False)
-                active_mapped_data.append(mapped_data)
+        # Process all tenant backups with unified retired status lookup
+        if all_tenant_backups:
+            all_mapped_data = []
+            for backup_item in all_tenant_backups:
+                mapped_data = map_backup_data_unified(backup_item, tenant_id, retired_backup_ids)
+                all_mapped_data.append(mapped_data)
 
-            if active_mapped_data:
-                upsert_many("backup_radar", active_mapped_data)
-                total_active = len(active_mapped_data)
+            if all_mapped_data:
+                upsert_many("backup_radar", all_mapped_data)
 
-        # Process retired backups for this tenant
-        if tenant_retired_backups:
-            retired_mapped_data = []
-            for backup_item in tenant_retired_backups:
-                mapped_data = map_backup_data(backup_item, tenant_id, is_retired=True)
-                retired_mapped_data.append(mapped_data)
-
-            if retired_mapped_data:
-                upsert_many("backup_radar", retired_mapped_data)
-                total_retired = len(retired_mapped_data)
+                # Count active vs retired from the processed data
+                total_active = sum(1 for item in all_mapped_data if item.get("is_retired") == 0)
+                total_retired = sum(1 for item in all_mapped_data if item.get("is_retired") == 1)
 
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()

@@ -117,11 +117,30 @@ def map_backup_data(backup_item: dict[str, Any], tenant_id: str, is_retired: boo
             logger.warning(f"Failed to parse lastResult date '{last_result}': {e}")
             days_since_last_result = None
 
+    # Determine backup_datetime from lastResult (actual backup time)
+    backup_datetime = None
+    last_result = backup_item.get("lastResult")
+    if last_result:
+        try:
+            # Parse the date string (format: "2025-09-10T13:32:41")
+            # Add timezone info if not present
+            if "Z" in last_result:
+                backup_datetime = datetime.fromisoformat(last_result.replace("Z", "+00:00")).isoformat()
+            else:
+                backup_datetime = datetime.fromisoformat(last_result).replace(tzinfo=UTC).isoformat()
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.warning(f"Failed to parse lastResult date '{last_result}' for backup_datetime: {e}")
+            # Fallback to current time if parsing fails
+            backup_datetime = datetime.now(UTC).isoformat()
+    else:
+        # Fallback to current time if no lastResult
+        backup_datetime = datetime.now(UTC).isoformat()
+
     # Map the data according to the schema
     mapped_data = {
         "tenant_id": tenant_id,
         "backup_id": backup_item.get("backupId"),
-        "backup_datetime": datetime.now(UTC).isoformat(),
+        "backup_datetime": backup_datetime,
         "company_name": backup_item.get("companyName"),
         "device_name": backup_item.get("deviceName"),
         "device_type": backup_item.get("deviceType"),

@@ -59,13 +59,13 @@ def get_tenant_id_from_company_name(company_name: str, tenants: list[dict[str, A
     return "unknown"
 
 
+# accepts to list of backup devices (all and retired) and performs a lookup on whether the backup id exists in the retired list if so, set is_retired to 1 (True)
 def map_backup_data(backup_item: dict[str, Any], tenant_id: str, is_retired: bool = False) -> dict[str, Any]:
     """
     Map Backup Radar API data to database schema.
     """
     # Extract nested values safely
     status_name = backup_item.get("status", {}).get("name", "") if backup_item.get("status") else ""
-    backup_type_name = backup_item.get("backupType", {}).get("name", "") if backup_item.get("backupType") else ""
 
     # Calculate days since last good result and last result from date fields
     days_since_last_good_result = None
@@ -130,7 +130,6 @@ def map_backup_data(backup_item: dict[str, Any], tenant_id: str, is_retired: boo
         "days_in_status": days_in_status,
         "is_verified": 1 if backup_item.get("isVerified") else 0,
         "backup_result": status_name,
-        "backup_type": backup_type_name,
         "backup_policy_name": backup_item.get("jobName"),
         "is_retired": 1 if is_retired else 0,
         "updated_at": datetime.now(UTC).isoformat(),

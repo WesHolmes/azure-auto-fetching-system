@@ -277,7 +277,6 @@ def init_schema():
                 days_in_status DECIMAL(10, 2),
                 is_verified INTEGER DEFAULT 0,
                 backup_result TEXT,
-                backup_type TEXT,
                 backup_policy_name TEXT,
                 is_retired INTEGER DEFAULT 0,
                 updated_at DATETIME DEFAULT (datetime('now', 'utc')),

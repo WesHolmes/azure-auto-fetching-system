@@ -27,10 +27,12 @@ def get_backups(days_back: int = 7) -> dict:
     resp.raise_for_status()
     return resp.json()
 
+
 def get_backup_retired() -> dict:
     resp = requests.get(f"{os.getenv('BACKUP_RADAR_BASE_URI')}/backups/retired", headers=_headers(), timeout=30)
     resp.raise_for_status()
     return resp.json()
+
 
 def get_backup_overview() -> dict:
     resp = requests.get(f"{os.getenv('BACKUP_RADAR_BASE_URI')}/backups/overview", headers=_headers(), timeout=30)
@@ -43,6 +45,6 @@ def get_backup_filters() -> dict:
     resp.raise_for_status()
     return resp.json()
 
+
 if __name__ == "__main__":
     print(get_backups(1))
-

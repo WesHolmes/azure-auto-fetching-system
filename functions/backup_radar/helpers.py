@@ -50,7 +50,12 @@ def get_tenant_id_from_company_name(company_name: str, tenants: list[dict[str, A
         "dba",
         "d.b.a.",
     }
-    company_words = {word for word in company_lower.split() if word not in business_suffixes}
+
+    # Clean punctuation from words for better matching
+    import re
+
+    cleaned_words = re.sub(r"[^\w\s]", " ", company_lower).split()
+    company_words = {word for word in cleaned_words if word not in business_suffixes}
 
     # Single pass through tenants with multiple matching strategies
     best_match = None
@@ -86,7 +91,8 @@ def get_tenant_id_from_company_name(company_name: str, tenants: list[dict[str, A
 
             # Check display name
             if isinstance(display_name, str):
-                tenant_words = {word for word in display_name.lower().split() if word not in business_suffixes}
+                cleaned_tenant_words = re.sub(r"[^\w\s]", " ", display_name.lower()).split()
+                tenant_words = {word for word in cleaned_tenant_words if word not in business_suffixes}
                 if tenant_words:
                     intersection = len(company_words.intersection(tenant_words))
                     union = len(company_words.union(tenant_words))
@@ -94,7 +100,8 @@ def get_tenant_id_from_company_name(company_name: str, tenants: list[dict[str, A
 
             # Check primary domain
             if isinstance(primary_domain, str):
-                domain_words = {word for word in primary_domain.lower().replace(".", " ").split() if word not in business_suffixes}
+                cleaned_domain_words = re.sub(r"[^\w\s]", " ", primary_domain.lower()).split()
+                domain_words = {word for word in cleaned_domain_words if word not in business_suffixes}
                 if domain_words:
                     intersection = len(company_words.intersection(domain_words))
                     union = len(company_words.union(domain_words))

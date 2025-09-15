@@ -14,49 +14,119 @@ logger = logging.getLogger(__name__)
 
 def get_tenant_id_from_company_name(company_name: str, tenants: list[dict[str, Any]]) -> str:
     """
-    Map company name to tenant ID by matching display_name or primary_domain.
-    Returns the first matching tenant ID or a default if no match found.
+    Map company name to tenant ID using intelligent matching strategies.
+    Returns the first matching tenant ID or 'unknown' if no match found.
     """
-    # Robust null/type checking
-    if company_name is None or not isinstance(company_name, str) or not company_name.strip():
+    # Input validation
+    if not company_name or not isinstance(company_name, str) or not company_name.strip():
         return "unknown"
 
-    # Try exact match first
+    company_lower = company_name.lower()
+
+    # Pre-process company name for word matching
+    business_suffixes = {
+        "inc",
+        "llc",
+        "corp",
+        "corporation",
+        "company",
+        "co",
+        "ltd",
+        "limited",
+        "the",
+        "of",
+        "and",
+        "&",
+        "associates",
+        "assoc",
+        "group",
+        "partners",
+        "partnership",
+        "llp",
+        "pc",
+        "p.c.",
+        "apc",
+        "a.p.c.",
+        "dba",
+        "d.b.a.",
+    }
+    company_words = {word for word in company_lower.split() if word not in business_suffixes}
+
+    # Single pass through tenants with multiple matching strategies
+    best_match = None
+    best_score = 0.0
+
     for tenant in tenants:
-        if tenant.get("display_name") == company_name:
+        display_name = tenant.get("display_name") or ""
+        primary_domain = tenant.get("primary_domain") or ""
+
+        # Skip if both fields are empty
+        if not display_name and not primary_domain:
+            continue
+
+        # Strategy 1: Exact matches (highest priority)
+        if display_name == company_name or primary_domain == company_name:
             return tenant["tenant_id"]
-        if tenant.get("primary_domain") == company_name:
+
+        # Strategy 2: Case-insensitive exact matches
+        if (isinstance(display_name, str) and display_name.lower() == company_lower) or (
+            isinstance(primary_domain, str) and primary_domain.lower() == company_lower
+        ):
             return tenant["tenant_id"]
 
-    # Try case-insensitive match
-    try:
-        company_lower = company_name.lower()
-        for tenant in tenants:
-            display_name = tenant.get("display_name") or ""
-            primary_domain = tenant.get("primary_domain") or ""
+        # Strategy 3: Partial matches (substring contains)
+        if (isinstance(display_name, str) and company_lower in display_name.lower()) or (
+            isinstance(primary_domain, str) and company_lower in primary_domain.lower()
+        ):
+            return tenant["tenant_id"]
 
-            if isinstance(display_name, str) and display_name.lower() == company_lower:
-                return tenant["tenant_id"]
-            if isinstance(primary_domain, str) and primary_domain.lower() == company_lower:
-                return tenant["tenant_id"]
+        # Strategy 4: Word-based matching (only if we have meaningful words)
+        if company_words:
+            score = 0.0
 
-        # Try partial match (contains)
-        for tenant in tenants:
-            display_name = tenant.get("display_name") or ""
-            primary_domain = tenant.get("primary_domain") or ""
+            # Check display name
+            if isinstance(display_name, str):
+                tenant_words = {word for word in display_name.lower().split() if word not in business_suffixes}
+                if tenant_words:
+                    intersection = len(company_words.intersection(tenant_words))
+                    union = len(company_words.union(tenant_words))
+                    score = max(score, intersection / union if union > 0 else 0.0)
 
-            if isinstance(display_name, str) and isinstance(primary_domain, str):
-                display_lower = display_name.lower()
-                domain_lower = primary_domain.lower()
-                if company_lower in display_lower or company_lower in domain_lower:
-                    return tenant["tenant_id"]
-    except (AttributeError, TypeError) as e:
-        # If company_name somehow became None or invalid after the initial check
-        logger.warning(f"Unexpected error processing company name '{company_name}': {e}")
-        return "unknown"
+            # Check primary domain
+            if isinstance(primary_domain, str):
+                domain_words = {word for word in primary_domain.lower().replace(".", " ").split() if word not in business_suffixes}
+                if domain_words:
+                    intersection = len(company_words.intersection(domain_words))
+                    union = len(company_words.union(domain_words))
+                    score = max(score, intersection / union if union > 0 else 0.0)
 
-    # No match found - this is normal for many company names
-    return "unknown"
+            # Update best match if score is good enough
+            if score > best_score and score >= 0.5:  # 50% word overlap threshold
+                best_score = score
+                best_match = tenant["tenant_id"]
+
+        # Strategy 5: Character-based fuzzy matching (fallback)
+        if not best_match:
+            score = 0.0
+
+            if isinstance(display_name, str):
+                company_chars = set(company_lower)
+                display_chars = set(display_name.lower())
+                intersection = len(company_chars.intersection(display_chars))
+                union = len(company_chars.union(display_chars))
+                score = max(score, intersection / union if union > 0 else 0.0)
+
+            if isinstance(primary_domain, str):
+                domain_chars = set(primary_domain.lower())
+                intersection = len(company_chars.intersection(domain_chars))
+                union = len(company_chars.union(domain_chars))
+                score = max(score, intersection / union if union > 0 else 0.0)
+
+            if score > best_score and score >= 0.7:  # 70% character similarity threshold
+                best_score = score
+                best_match = tenant["tenant_id"]
+
+    return best_match or "unknown"
 
 
 def map_backup_data_unified(backup_item: dict[str, Any], tenant_id: str, retired_backup_ids: set[int]) -> dict[str, Any]:

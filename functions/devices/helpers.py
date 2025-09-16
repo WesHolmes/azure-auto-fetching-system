@@ -39,6 +39,21 @@ def format_bytes(bytes_value):
     return "0 B"
 
 
+def bytes_to_gb(bytes_value):
+    """Convert bytes to GB as a float for database storage and sorting"""
+    if bytes_value is None or bytes_value == 0:
+        return None
+
+    try:
+        bytes_value = int(bytes_value)
+        if bytes_value < 0:
+            return None
+        # Convert to GB
+        return round(bytes_value / (1024**3), 2)
+    except (ValueError, TypeError):
+        return None
+
+
 def _test_tenant_capability(graph, graph_beta, tenant_id):
     """Helper function to test tenant capability for premium features"""
     try:
@@ -75,6 +90,7 @@ def fetch_intune_devices(tenant_id):
         logger.info(f"Starting Intune device fetch for tenant {tenant_id}")
         graph = GraphBetaClient(tenant_id)
 
+        # First, get the list of devices
         devices = graph.get(
             "/deviceManagement/managedDevices",
             select=[
@@ -93,7 +109,6 @@ def fetch_intune_devices(tenant_id):
                 "manufacturer",  # Additional Intune fields
                 "totalStorageSpaceInBytes",
                 "freeStorageSpaceInBytes",
-                "physicalMemoryInBytes",
                 "complianceState",
             ],
             top=999,
@@ -101,12 +116,16 @@ def fetch_intune_devices(tenant_id):
 
         logger.info(f"Successfully fetched {len(devices)} Intune devices for tenant {tenant_id}")
 
+        # Note: Physical memory fetching removed due to Microsoft Graph API limitations
+        # The physicalMemoryInBytes field returns 0/null even with individual device calls
+        logger.info("Skipping physical memory fetch due to Microsoft Graph API limitations")
+
         # Debug: Log sample device data to see what fields are available
         if devices:
             sample_device = devices[0]
-            logger.debug(f"Sample Intune device fields: {list(sample_device.keys())}")
-            logger.debug(
-                f"Sample device storage fields: totalStorageSpaceInBytes={sample_device.get('totalStorageSpaceInBytes')}, freeStorageSpaceInBytes={sample_device.get('freeStorageSpaceInBytes')}, physicalMemoryInBytes={sample_device.get('physicalMemoryInBytes')}, isEncrypted={sample_device.get('isEncrypted')}"
+            logger.info(f"Sample Intune device fields: {list(sample_device.keys())}")
+            logger.info(
+                f"Sample device data: isEncrypted={sample_device.get('isEncrypted')}, enrolledDateTime={sample_device.get('enrolledDateTime')}, lastSyncDateTime={sample_device.get('lastSyncDateTime')}"
             )
 
         return devices
@@ -129,16 +148,24 @@ def fetch_azure_devices(tenant_id):
             select=[
                 "id",
                 "displayName",
+                "accountEnabled",
+                "approximateLastSignInDateTime",
+                "complianceExpirationDateTime",
                 "deviceOwnership",
+                "deviceVersion",
                 "isCompliant",
                 "isManaged",
+                "isRooted",
                 "managementType",
-                "manufacturer",  # Already included for Azure devices
+                "manufacturer",
+                "mdmAppId",
                 "model",
-                "serialNumber",
                 "operatingSystem",
                 "operatingSystemVersion",
-                "approximateLastSignInDateTime",
+                "profileType",
+                "trustType",
+                "onPremisesSyncEnabled",
+                "onPremisesLastSyncDateTime",
             ],
             top=999,
         )
@@ -165,7 +192,7 @@ def fetch_azure_device_registered_users(tenant_id, device_id):
 
 
 def transform_intune_devices(devices, tenant_id):
-    """Transform Intune devices to database records"""
+    """Transform Intune devices to database records for intune_devices table"""
     records = []
 
     for device in devices:
@@ -194,29 +221,55 @@ def transform_intune_devices(devices, tenant_id):
             # Handle storage and memory fields
             manufacturer = device.get("manufacturer") or "N/A"
 
-            # Debug logging for storage fields
+            # Get raw byte values for storage
             total_storage_bytes = device.get("totalStorageSpaceInBytes")
             free_storage_bytes = device.get("freeStorageSpaceInBytes")
-            physical_memory_bytes = device.get("physicalMemoryInBytes")
             is_encrypted_raw = device.get("isEncrypted")
 
+            # Debug logging for storage fields
             logger.debug(
-                f"Device {device_name} storage data: total={total_storage_bytes}, free={free_storage_bytes}, memory={physical_memory_bytes}, encrypted={is_encrypted_raw}"
+                f"Device {device_name} storage data: total={total_storage_bytes}, free={free_storage_bytes}, encrypted={is_encrypted_raw}"
             )
 
-            total_storage = format_bytes(total_storage_bytes)
-            free_storage = format_bytes(free_storage_bytes)
-            physical_memory = format_bytes(physical_memory_bytes)
-            is_encrypted = 1 if is_encrypted_raw else 0
+            # Convert to GB for proper database sorting
+            total_storage_gb = bytes_to_gb(total_storage_bytes)
+            free_storage_gb = bytes_to_gb(free_storage_bytes)
 
-            # Handle dates
+            # Handle is_encrypted field - check for different possible values
+            if is_encrypted_raw is True or is_encrypted_raw == "true" or is_encrypted_raw == 1:
+                is_encrypted = 1
+            elif is_encrypted_raw is False or is_encrypted_raw == "false" or is_encrypted_raw == 0:
+                is_encrypted = 0
+            else:
+                is_encrypted = 0  # Default to 0 if unknown
+                logger.debug(f"Device {device_name} unknown isEncrypted value: {is_encrypted_raw} (type: {type(is_encrypted_raw)})")
+
+            # Handle dates - ensure proper ISO format
             enrolled_date = device.get("enrolledDateTime")
             last_sign_in_date = device.get("lastSyncDateTime")  # Use last sync as proxy for activity
+
+            # Debug logging for date fields
+            logger.debug(f"Device {device_name} date data: enrolled={enrolled_date}, last_sync={last_sign_in_date}")
+
+            # Convert dates to proper ISO format if they exist
+            if enrolled_date and not enrolled_date.endswith("Z"):
+                # Ensure proper ISO format
+                try:
+                    if "T" in enrolled_date:
+                        enrolled_date = enrolled_date + "Z" if not enrolled_date.endswith("Z") else enrolled_date
+                except Exception:
+                    enrolled_date = None
+
+            if last_sign_in_date and not last_sign_in_date.endswith("Z"):
+                try:
+                    if "T" in last_sign_in_date:
+                        last_sign_in_date = last_sign_in_date + "Z" if not last_sign_in_date.endswith("Z") else last_sign_in_date
+                except Exception:
+                    last_sign_in_date = None
 
             record = {
                 "tenant_id": tenant_id,
                 "device_id": device_id,
-                "device_type": "Intune",
                 "device_name": device_name,
                 "model": model,
                 "serial_number": serial_number,
@@ -226,9 +279,8 @@ def transform_intune_devices(devices, tenant_id):
                 "is_compliant": is_compliant,
                 "is_managed": is_managed,
                 "manufacturer": manufacturer,
-                "total_storage": total_storage,
-                "free_storage": free_storage,
-                "physical_memory": physical_memory,
+                "total_storage_gb": total_storage_gb,
+                "free_storage_gb": free_storage_gb,
                 "compliance_state": compliance_state,
                 "is_encrypted": is_encrypted,
                 "last_sign_in_date": last_sign_in_date,
@@ -256,7 +308,6 @@ def transform_azure_devices(devices, tenant_id):
             device_id = f"azure_{device.get('id')}"
             device_name = device.get("displayName") or "N/A"
             model = device.get("model") or "N/A"
-            serial_number = device.get("serialNumber") or "N/A"
             operating_system = device.get("operatingSystem") or "N/A"
             os_version = device.get("operatingSystemVersion") or "N/A"
 
@@ -275,37 +326,41 @@ def transform_azure_devices(devices, tenant_id):
 
             # Handle additional fields for Azure devices
             manufacturer = device.get("manufacturer") or "N/A"
-            # Azure devices don't have storage/memory/compliance state fields
-            total_storage = "N/A"
-            free_storage = "N/A"
-            physical_memory = "N/A"
-            compliance_state = "unknown"
-            is_encrypted = 0  # Azure devices don't have encryption info in this endpoint
 
             # Handle dates
             last_sign_in_date = device.get("approximateLastSignInDateTime")
-            enrolled_date = None  # Azure devices don't have enrollment date in this endpoint
+            on_premises_last_sync_date = device.get("onPremisesLastSyncDateTime")
+
+            # Handle new Azure AD API fields
+            account_enabled = 1 if device.get("accountEnabled", True) else 0
+            device_version = device.get("deviceVersion") or "N/A"
+            is_rooted = 1 if device.get("isRooted") else 0
+            mdm_app_id = device.get("mdmAppId") or "N/A"
+            profile_type = device.get("profileType") or "N/A"
+            trust_type = device.get("trustType") or "N/A"
+            on_premises_sync_enabled = 1 if device.get("onPremisesSyncEnabled") else 0
 
             record = {
                 "tenant_id": tenant_id,
                 "device_id": device_id,
-                "device_type": "Azure",
                 "device_name": device_name,
                 "model": model,
-                "serial_number": serial_number,
                 "operating_system": operating_system,
                 "os_version": os_version,
                 "device_ownership": device_ownership,
                 "is_compliant": is_compliant,
                 "is_managed": is_managed,
                 "manufacturer": manufacturer,
-                "total_storage": total_storage,
-                "free_storage": free_storage,
-                "physical_memory": physical_memory,
-                "compliance_state": compliance_state,
-                "is_encrypted": is_encrypted,
-                "last_sign_in_date": last_sign_in_date,
-                "enrolled_date": enrolled_date,
+                # New Azure AD API fields
+                "account_enabled": account_enabled,
+                "device_version": device_version,
+                "is_rooted": is_rooted,
+                "mdm_app_id": mdm_app_id,
+                "profile_type": profile_type,
+                "trust_type": trust_type,
+                "on_premises_sync_enabled": on_premises_sync_enabled,
+                "on_premises_last_sync_date": on_premises_last_sync_date,
+                "last_sign_in_date": last_sign_in_date,  # Moved to third-to-last position
                 "created_at": datetime.now().isoformat(),
                 "last_updated": datetime.now().isoformat(),
                 # Store original device ID for fetching registered users
@@ -320,7 +375,7 @@ def transform_azure_devices(devices, tenant_id):
     return records
 
 
-def create_user_device_relationships_batch(tenant_id, devices):
+def create_user_device_relationships_batch(tenant_id, devices, device_source="unknown"):
     """Create user-device relationship records with concurrent processing"""
     relationships = []
 
@@ -328,10 +383,10 @@ def create_user_device_relationships_batch(tenant_id, devices):
         """Process relationships for a single device"""
         try:
             device_id = device["device_id"]
-            device_type = device["device_type"]
 
-            if device_type == "Intune":
-                # For Intune devices, use the userId from the device record
+            # Determine device type based on source or device characteristics
+            if device_source == "intune" or "_user_id" in device:
+                # Intune device - use the userId from the device record
                 user_id = device.get("_user_id")
                 if user_id:
                     return [
@@ -348,8 +403,8 @@ def create_user_device_relationships_batch(tenant_id, devices):
                     logger.debug(f"No user_id found for Intune device {device_id}")
                     return []
 
-            elif device_type == "Azure":
-                # For Azure devices, fetch registered users
+            elif device_source == "azure" or "_original_device_id" in device:
+                # Azure device - fetch registered users
                 original_device_id = device.get("_original_device_id")
                 if original_device_id:
                     try:
@@ -401,8 +456,8 @@ def create_user_device_relationships_batch(tenant_id, devices):
     return relationships
 
 
-def sync_devices(tenant_id, tenant_name):
-    """Orchestrate device synchronization with concurrent processing"""
+def sync_intune_devices(tenant_id, tenant_name):
+    """Orchestrate Intune device synchronization with concurrent processing"""
     start_time = datetime.now()
     logger.info(f"Starting device sync for {tenant_name} (tenant_id: {tenant_id})")
 
@@ -434,20 +489,7 @@ def sync_devices(tenant_id, tenant_name):
                 logger.error(f"Failed to sync Intune devices for {tenant_name}: {str(e)}")
                 # Continue with Azure sync even if Intune fails
 
-        # Sync Azure devices (all tenants)
-        try:
-            logger.info(f"Syncing Azure devices for tenant {tenant_name}")
-            azure_devices = fetch_azure_devices(tenant_id)
-            if azure_devices:
-                azure_records = transform_azure_devices(azure_devices, tenant_id)
-                all_device_records.extend(azure_records)
-                logger.info(f"Processed {len(azure_records)} Azure devices")
-            else:
-                logger.info(f"No Azure devices found for {tenant_name}")
-
-        except Exception as e:
-            logger.error(f"Failed to sync Azure devices for {tenant_name}: {str(e)}")
-            # If both fail, we'll have an empty result
+        # Note: Azure devices are now handled separately - this function only handles Intune devices
 
         if not all_device_records:
             logger.warning(f"No devices found for {tenant_name}")
@@ -462,7 +504,7 @@ def sync_devices(tenant_id, tenant_name):
 
         # Create user-device relationships with concurrent processing
         logger.info(f"Creating user-device relationships for {len(all_device_records)} devices...")
-        all_relationship_records = create_user_device_relationships_batch(tenant_id, all_device_records)
+        all_relationship_records = create_user_device_relationships_batch(tenant_id, all_device_records, "intune")
 
         # Clean device records (remove temporary fields used for relationship creation)
         clean_device_records = []
@@ -476,8 +518,8 @@ def sync_devices(tenant_id, tenant_name):
 
         try:
             if clean_device_records:
-                devices_stored = upsert_many("devices", clean_device_records)
-                logger.info(f"Stored {devices_stored} devices for {tenant_name}")
+                devices_stored = upsert_many("intune_devices", clean_device_records)
+                logger.info(f"Stored {devices_stored} Intune devices for {tenant_name}")
 
             if all_relationship_records:
                 relationships_stored = upsert_many("user_devicesV2", all_relationship_records)
@@ -492,6 +534,96 @@ def sync_devices(tenant_id, tenant_name):
         duration = (datetime.now() - start_time).total_seconds()
         logger.info(
             f"Completed device sync for {tenant_name}: {devices_stored} devices, {relationships_stored} relationships in {duration:.1f}s"
+        )
+
+        return {
+            "status": "success",
+            "tenant_id": tenant_id,
+            "tenant_name": tenant_name,
+            "devices_synced": devices_stored,
+            "relationships_synced": relationships_stored,
+            "duration_seconds": duration,
+        }
+
+    except Exception as e:
+        duration = (datetime.now() - start_time).total_seconds()
+        error_msg = clean_error_message(str(e), tenant_name=tenant_name)
+        logger.error(error_msg)
+        logger.debug(f"Full error details for {tenant_name}: {str(e)}", exc_info=True)
+
+        return {
+            "status": "error",
+            "tenant_id": tenant_id,
+            "tenant_name": tenant_name,
+            "error": str(e),
+            "duration_seconds": duration,
+        }
+
+
+def sync_azure_devices(tenant_id, tenant_name):
+    """Orchestrate Azure device synchronization"""
+    start_time = datetime.now()
+    logger.info(f"Starting Azure device sync for {tenant_name} (tenant_id: {tenant_id})")
+
+    # Initialize database schema
+    init_schema()
+
+    try:
+        # Sync Azure devices (all tenants)
+        try:
+            logger.info(f"Syncing Azure devices for tenant {tenant_name}")
+            azure_devices = fetch_azure_devices(tenant_id)
+
+            if not azure_devices:
+                logger.info(f"No Azure devices found for {tenant_name}")
+                return {
+                    "status": "completed",
+                    "tenant_id": tenant_id,
+                    "tenant_name": tenant_name,
+                    "devices_synced": 0,
+                    "relationships_synced": 0,
+                    "duration_seconds": (datetime.now() - start_time).total_seconds(),
+                }
+
+            azure_records = transform_azure_devices(azure_devices, tenant_id)
+            logger.info(f"Processed {len(azure_records)} Azure devices")
+
+        except Exception as e:
+            logger.error(f"Failed to sync Azure devices for {tenant_name}: {str(e)}")
+            raise
+
+        # Create user-device relationships with concurrent processing
+        logger.info(f"Creating user-device relationships for {len(azure_records)} devices...")
+        all_relationship_records = create_user_device_relationships_batch(tenant_id, azure_records, "azure")
+
+        # Clean device records (remove temporary fields used for relationship creation)
+        clean_device_records = []
+        for record in azure_records:
+            clean_record = {k: v for k, v in record.items() if not k.startswith("_")}
+            clean_device_records.append(clean_record)
+
+        # Store devices and relationships in database
+        devices_stored = 0
+        relationships_stored = 0
+
+        try:
+            if clean_device_records:
+                devices_stored = upsert_many("azure_devices", clean_device_records)
+                logger.info(f"Stored {devices_stored} Azure devices for {tenant_name}")
+
+            if all_relationship_records:
+                relationships_stored = upsert_many("user_devicesV2", all_relationship_records)
+                logger.info(f"Stored {relationships_stored} user-device relationships for {tenant_name}")
+            else:
+                logger.info(f"No user-device relationships to store for {tenant_name}")
+
+        except Exception as e:
+            logger.error(f"Failed to store Azure devices for {tenant_name}: {str(e)}", exc_info=True)
+            raise
+
+        duration = (datetime.now() - start_time).total_seconds()
+        logger.info(
+            f"Completed Azure device sync for {tenant_name}: {devices_stored} devices, {relationships_stored} relationships in {duration:.1f}s"
         )
 
         return {

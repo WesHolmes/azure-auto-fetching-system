@@ -4,7 +4,7 @@ import logging
 import azure.functions as func
 
 from db.db_client import query
-from functions.devices.helpers import sync_devices
+from functions.devices.helpers import sync_azure_devices, sync_intune_devices
 from shared.graph_client import get_tenants
 from shared.utils import clean_error_message, create_error_response, create_success_response
 
@@ -43,7 +43,7 @@ def http_devices_sync(req: func.HttpRequest) -> func.HttpResponse:
             logger.info(f"Starting device sync for {tenant_name}")
 
             try:
-                result = sync_devices(tenant_id, tenant_name)
+                result = sync_intune_devices(tenant_id, tenant_name)
                 results.append(result)
 
                 if result["status"] == "success":
@@ -112,11 +112,11 @@ def get_devices(req: func.HttpRequest) -> func.HttpResponse:
             SELECT d.*,
                    COUNT(DISTINCT ud.user_id) as user_count,
                    SUM(CASE WHEN ud.relationship_type = 'owner' THEN 1 ELSE 0 END) as owner_count
-            FROM devices d
+            FROM intune_devices d
             LEFT JOIN user_devicesV2 ud ON d.tenant_id = ud.tenant_id AND d.device_id = ud.device_id
             WHERE d.tenant_id = ?
             GROUP BY d.device_id, d.tenant_id
-            ORDER BY d.device_type, d.device_name
+            ORDER BY d.device_name
         """
 
         devices = query(devices_query, (tenant_id,))
@@ -131,3 +131,63 @@ def get_devices(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logger.error(f"Error retrieving devices for tenant {tenant_id}: {str(e)}")
         return create_error_response(f"Failed to retrieve devices: {str(e)}", 500)
+
+
+def http_azure_devices_sync(req: func.HttpRequest) -> func.HttpResponse:
+    """Sync Azure devices for all tenants"""
+    try:
+        logger.info("Starting Azure device sync for all tenants")
+        start_time = datetime.now()
+
+        tenants = get_tenants()
+        total_devices = 0
+        total_relationships = 0
+        results = []
+
+        for tenant in tenants:
+            tenant_id = tenant["tenant_id"]
+            tenant_name = tenant["display_name"]
+            logger.info(f"Starting Azure device sync for {tenant_name}")
+
+            try:
+                result = sync_azure_devices(tenant_id, tenant_name)
+                results.append(result)
+
+                if result["status"] == "success":
+                    total_devices += result.get("devices_synced", 0)
+                    total_relationships += result.get("relationships_synced", 0)
+                    logger.info(
+                        f"✓ Azure {tenant_name}: {result.get('devices_synced', 0)} devices, {result.get('relationships_synced', 0)} relationships synced"
+                    )
+                else:
+                    logger.error(f"✗ Azure {tenant_name}: {result.get('error', 'Unknown error')}")
+
+            except Exception as e:
+                error_msg = clean_error_message(str(e), tenant_name=tenant_name)
+                logger.error(f"✗ Azure {tenant_name}: {error_msg}")
+                results.append(
+                    {
+                        "status": "error",
+                        "tenant_id": tenant_id,
+                        "tenant_name": tenant_name,
+                        "error": str(e),
+                    }
+                )
+
+        duration = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Azure device sync completed: {total_devices} devices, {total_relationships} relationships in {duration:.1f}s")
+
+        return create_success_response(
+            data={
+                "results": results,
+                "total_devices": total_devices,
+                "total_relationships": total_relationships,
+                "duration_seconds": duration,
+            },
+            operation="azure_devices_sync",
+            message=f"Azure device sync completed: {total_devices} devices, {total_relationships} relationships",
+        )
+
+    except Exception as e:
+        logger.error(f"Azure device sync failed: {str(e)}")
+        return create_error_response(f"Azure device sync failed: {str(e)}", 500)

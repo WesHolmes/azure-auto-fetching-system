@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 import logging
+import re
 from typing import Any
 
 from db.db_client import upsert_many
@@ -50,9 +51,6 @@ def get_tenant_id_from_company_name(company_name: str, tenants: list[dict[str, A
         "dba",
         "d.b.a.",
     }
-
-    # Clean punctuation from words for better matching
-    import re
 
     cleaned_words = re.sub(r"[^\w\s]", " ", company_lower).split()
     company_words = {word for word in cleaned_words if word not in business_suffixes}

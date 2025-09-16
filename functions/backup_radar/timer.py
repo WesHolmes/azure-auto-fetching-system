@@ -28,7 +28,7 @@ def timer_backup_radar_sync(timer: func.TimerRequest) -> None:
         logger.info(f"Found {len(tenants)} tenants for Backup Radar sync")
 
         # Sync backup data for all tenants
-        result = sync_backup_radar_data(tenants, days_back=7)
+        result = sync_backup_radar_data(tenants)
 
         # Log results
         if result["status"] == "success":

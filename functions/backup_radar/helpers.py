@@ -13,6 +13,44 @@ from shared.utils import clean_error_message
 logger = logging.getLogger(__name__)
 
 
+def clean_undefined_value(value: Any) -> Any:
+    """
+    Clean undefined/null values by converting them to None (which becomes NULL in database).
+    """
+    if value is None or value == "" or str(value).lower() in ["undefined", "null", "[undefined]", "[null]"]:
+        return None
+    return value
+
+
+def determine_correct_company_name(backup_item: dict[str, Any], tenants: list[dict[str, Any]]) -> str:
+    """
+    Determine the correct company name from backup item, trying both companyName and deviceName.
+    Returns the best matching company name from tenant data.
+    """
+    company_name = backup_item.get("companyName") or "Unknown"
+    device_name = backup_item.get("deviceName") or "Unknown"
+
+    # If company name is valid and not undefined, use it
+    if company_name not in ["[Undefined]", "Unknown", "undefined", "null"]:
+        return company_name
+
+    # If company name is undefined but device name contains company info, try to extract it
+    if device_name != "Unknown":
+        for tenant in tenants:
+            display_name = tenant.get("display_name") or ""
+            primary_domain = tenant.get("primary_domain") or ""
+
+            # Check if device name contains any part of the tenant name
+            device_lower = device_name.lower()
+            if (display_name and any(word in device_lower for word in display_name.lower().split() if len(word) > 2)) or (
+                primary_domain and any(word in device_lower for word in primary_domain.lower().split() if len(word) > 2)
+            ):
+                return tenant.get("display_name", company_name)
+
+    # Fallback to original company name
+    return company_name
+
+
 def get_tenant_id_from_company_name(company_name: str, tenants: list[dict[str, Any]]) -> str:
     """
     Map company name to tenant ID using intelligent matching strategies.
@@ -134,7 +172,9 @@ def get_tenant_id_from_company_name(company_name: str, tenants: list[dict[str, A
     return best_match or "unknown"
 
 
-def map_backup_data_unified(backup_item: dict[str, Any], tenant_id: str, retired_backup_ids: set[int]) -> dict[str, Any]:
+def map_backup_data_unified(
+    backup_item: dict[str, Any], tenant_id: str, retired_backup_ids: set[int], tenants: list[dict[str, Any]]
+) -> dict[str, Any]:
     """
     Map Backup Radar API data to database schema with unified retired status lookup.
     Accepts a list of backup devices (all and retired) and performs a lookup on whether
@@ -143,8 +183,7 @@ def map_backup_data_unified(backup_item: dict[str, Any], tenant_id: str, retired
     # Extract nested values safely
     status_name = backup_item.get("status", {}).get("name", "") if backup_item.get("status") else ""
 
-    # Calculate days since last good result and last result from date fields
-    days_since_last_good_result = None
+    # Calculate days since last result from date fields
     days_since_last_result = None
     days_in_status = backup_item.get("daysInStatus")
 
@@ -154,25 +193,6 @@ def map_backup_data_unified(backup_item: dict[str, Any], tenant_id: str, retired
             days_in_status = float(days_in_status)
         except (ValueError, TypeError):
             days_in_status = None
-
-    # Calculate days since last good result (from lastSuccess date)
-    last_success = backup_item.get("lastSuccess")
-    if last_success:
-        try:
-            # Parse the date string (format: "2025-09-03T13:36:40")
-            # Add timezone info if not present
-            if "Z" in last_success:
-                success_date = datetime.fromisoformat(last_success.replace("Z", "+00:00"))
-            else:
-                success_date = datetime.fromisoformat(last_success)
-                # Assume UTC if no timezone info
-                success_date = success_date.replace(tzinfo=UTC)
-
-            days_since_last_good_result = (datetime.now(UTC) - success_date).total_seconds() / 86400
-            days_since_last_good_result = round(days_since_last_good_result, 2)
-        except (ValueError, TypeError, AttributeError) as e:
-            logger.warning(f"Failed to parse lastSuccess date '{last_success}': {e}")
-            days_since_last_good_result = None
 
     # Calculate days since last result (from lastResult date)
     last_result = backup_item.get("lastResult")
@@ -216,20 +236,23 @@ def map_backup_data_unified(backup_item: dict[str, Any], tenant_id: str, retired
     backup_id = backup_item.get("backupId")
     is_retired = backup_id in retired_backup_ids if backup_id is not None else False
 
+    # Get company name and device name (company name should already be corrected by caller)
+    company_name = determine_correct_company_name(backup_item, tenants)
+    device_name = clean_undefined_value(backup_item.get("deviceName")) or "Unknown"
+
     # Map the data according to the schema
     mapped_data = {
         "tenant_id": tenant_id,
         "backup_id": backup_id,
         "backup_datetime": backup_datetime,
-        "company_name": backup_item.get("companyName"),
-        "device_name": backup_item.get("deviceName"),
-        "device_type": backup_item.get("deviceType"),
-        "days_since_last_good_result": days_since_last_good_result,
+        "company_name": company_name,
+        "device_name": device_name,
+        "device_type": clean_undefined_value(backup_item.get("deviceType")),
         "days_since_last_result": days_since_last_result,
         "days_in_status": days_in_status,
         "is_verified": 1 if backup_item.get("isVerified") else 0,
-        "backup_result": status_name,
-        "backup_policy_name": backup_item.get("jobName"),
+        "backup_result": clean_undefined_value(status_name),
+        "backup_policy_name": clean_undefined_value(backup_item.get("jobName")),
         "is_retired": 1 if is_retired else 0,
         "updated_at": datetime.now(UTC).isoformat(),
     }
@@ -250,9 +273,10 @@ def process_backup_batch_unified(
     def process_single_backup(backup_item):
         """Process a single backup item with unified retired status lookup"""
         try:
-            company_name = backup_item.get("companyName")
+            # First determine the correct company name (including from device name if needed)
+            company_name = determine_correct_company_name(backup_item, tenants)
             tenant_id = get_tenant_id_from_company_name(company_name, tenants)
-            mapped_item = map_backup_data_unified(backup_item, tenant_id, retired_backup_ids)
+            mapped_item = map_backup_data_unified(backup_item, tenant_id, retired_backup_ids, tenants)
             return mapped_item, None
         except Exception as e:
             error_msg = f"Error processing backup {backup_item.get('backupId', 'unknown')}: {clean_error_message(str(e))}"
@@ -289,7 +313,7 @@ def process_backup_batch_unified(
     return mapped_data, errors
 
 
-def sync_backup_radar_data(tenants: list[dict[str, Any]], days_back: int = 7) -> dict[str, Any]:
+def sync_backup_radar_data(tenants: list[dict[str, Any]]) -> dict[str, Any]:
     """
     Sync Backup Radar data for all tenants.
     Fetches both active and retired backups and stores them in the database.
@@ -304,7 +328,7 @@ def sync_backup_radar_data(tenants: list[dict[str, Any]], days_back: int = 7) ->
     try:
         # Fetch active backups
         logger.info("Fetching active backups from Backup Radar API")
-        active_backups_response = get_backups(days_back)
+        active_backups_response = get_backups()
         active_backups = active_backups_response.get("Results", [])
 
         # Fetch retired backups
@@ -413,7 +437,7 @@ def sync_backup_radar_for_tenant(tenant_id: str, tenants: list[dict[str, Any]], 
         if all_tenant_backups:
             all_mapped_data = []
             for backup_item in all_tenant_backups:
-                mapped_data = map_backup_data_unified(backup_item, tenant_id, retired_backup_ids)
+                mapped_data = map_backup_data_unified(backup_item, tenant_id, retired_backup_ids, tenants)
                 all_mapped_data.append(mapped_data)
 
             if all_mapped_data:

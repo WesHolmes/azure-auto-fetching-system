@@ -19,7 +19,7 @@ def _headers():
     return {"ApiKey": key, "Content-Type": "application/json"}
 
 
-def get_backups(days_back: int = 7) -> dict:
+def get_backups(days_back: int = 1) -> dict:
     start = datetime.now(UTC) - timedelta(days=days_back)
     params = {"page": 1, "size": 1000, "date": start.strftime("%Y-%m-%d")}
 

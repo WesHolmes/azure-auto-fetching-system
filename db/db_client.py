@@ -272,7 +272,6 @@ def init_schema():
                 company_name TEXT,
                 device_name TEXT,
                 device_type TEXT,
-                days_since_last_good_result DECIMAL(10, 2),
                 days_since_last_result DECIMAL(10, 2),
                 days_in_status DECIMAL(10, 2),
                 is_verified INTEGER DEFAULT 0,

@@ -375,7 +375,7 @@ def transform_azure_devices(devices, tenant_id):
     return records
 
 
-def create_user_device_relationships_batch(tenant_id, devices):
+def create_user_device_relationships_batch(tenant_id, devices, device_source="unknown"):
     """Create user-device relationship records with concurrent processing"""
     relationships = []
 
@@ -383,10 +383,10 @@ def create_user_device_relationships_batch(tenant_id, devices):
         """Process relationships for a single device"""
         try:
             device_id = device["device_id"]
-            device_type = device["device_type"]
 
-            if device_type == "Intune":
-                # For Intune devices, use the userId from the device record
+            # Determine device type based on source or device characteristics
+            if device_source == "intune" or "_user_id" in device:
+                # Intune device - use the userId from the device record
                 user_id = device.get("_user_id")
                 if user_id:
                     return [
@@ -403,8 +403,8 @@ def create_user_device_relationships_batch(tenant_id, devices):
                     logger.debug(f"No user_id found for Intune device {device_id}")
                     return []
 
-            elif device_type == "Azure":
-                # For Azure devices, fetch registered users
+            elif device_source == "azure" or "_original_device_id" in device:
+                # Azure device - fetch registered users
                 original_device_id = device.get("_original_device_id")
                 if original_device_id:
                     try:
@@ -504,7 +504,7 @@ def sync_intune_devices(tenant_id, tenant_name):
 
         # Create user-device relationships with concurrent processing
         logger.info(f"Creating user-device relationships for {len(all_device_records)} devices...")
-        all_relationship_records = create_user_device_relationships_batch(tenant_id, all_device_records)
+        all_relationship_records = create_user_device_relationships_batch(tenant_id, all_device_records, "intune")
 
         # Clean device records (remove temporary fields used for relationship creation)
         clean_device_records = []
@@ -594,7 +594,7 @@ def sync_azure_devices(tenant_id, tenant_name):
 
         # Create user-device relationships with concurrent processing
         logger.info(f"Creating user-device relationships for {len(azure_records)} devices...")
-        all_relationship_records = create_user_device_relationships_batch(tenant_id, azure_records)
+        all_relationship_records = create_user_device_relationships_batch(tenant_id, azure_records, "azure")
 
         # Clean device records (remove temporary fields used for relationship creation)
         clean_device_records = []

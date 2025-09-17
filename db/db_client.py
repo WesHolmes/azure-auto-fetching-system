@@ -284,6 +284,21 @@ def init_schema():
         """
         )
 
+        # Automox Organizations table - stores organization data from Automox API
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS amx_orgs (
+                organization_id BIGINT NOT NULL,
+                connectwise_id BIGINT NOT NULL,
+                display_name TEXT NOT NULL,
+                device_count INTEGER,
+                created_at TIMESTAMP NOT NULL DEFAULT (datetime('now')),
+                last_updated TIMESTAMP NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (organization_id)
+            )
+        """
+        )
+
         # Basic indexes only - V2 tables
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_usersV2_tenant ON usersV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_licenses_tenant ON licenses(tenant_id)")
@@ -304,6 +319,8 @@ def init_schema():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_backup_radar_datetime ON backup_radar(backup_datetime)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_backup_radar_device ON backup_radar(device_name, backup_datetime)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_backup_radar_tenant_company ON backup_radar(tenant_id, company_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_orgs_connectwise ON amx_orgs(connectwise_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_orgs_display_name ON amx_orgs(display_name)")
 
         conn.commit()
         logger.info("Database schema initialized")

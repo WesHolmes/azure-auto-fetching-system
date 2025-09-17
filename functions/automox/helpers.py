@@ -5,7 +5,7 @@ from typing import Any
 import pytz
 
 from db.db_client import init_schema, upsert_many
-from shared.amx_api import AutomoxApi, AutomoxError
+from shared.amx_api import AutomoxApi, AutomoxError, format_datetime
 from shared.utils import clean_error_message
 
 
@@ -159,3 +159,227 @@ def get_organization_statistics() -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Error getting organization statistics: {e}")
         return {"total_organizations": 0, "organizations_with_devices": 0, "total_devices": 0, "latest_sync": None, "error": str(e)}
+
+
+def transform_device_data(device_data: dict[str, Any], org_id: int) -> dict[str, Any]:
+    """
+    Transform raw device data from Automox API into database format.
+
+    Args:
+        device_data: Raw device data from Automox API
+        org_id: Organization ID this device belongs to
+
+    Returns:
+        Transformed device data for database storage
+    """
+    import json
+
+    # Handle IP addresses - convert string to list if needed
+    ip_addrs = device_data.get("ip_addrs", "")
+    if isinstance(ip_addrs, str) and ip_addrs:
+        ip_addrs = [ip_addrs]
+    elif not ip_addrs:
+        ip_addrs = []
+
+    # Create device detail object with additional info
+    device_detail = {
+        "model": device_data.get("model"),
+        "vendor": device_data.get("vendor"),
+        "version": device_data.get("version"),
+        "mdm_server": device_data.get("mdm_server"),
+        "mdm_profile_installed": device_data.get("mdm_profile_installed"),
+        "secure_token_account": device_data.get("secure_token_account"),
+        "last_logged_in_user": device_data.get("last_logged_in_user"),
+        "last_process_time": device_data.get("last_process_time"),
+        "last_disconnect_time": device_data.get("last_disconnect_time"),
+        "is_delayed_by_user": device_data.get("is_delayed_by_user"),
+        "needs_attention": device_data.get("needs_attention"),
+        "is_compatible": device_data.get("is_compatible"),
+        "create_time": device_data.get("create_time"),
+    }
+
+    return {
+        "organization_id": org_id,
+        "device_id": device_data.get("id"),
+        "display_name": device_data.get("name"),  # Use 'name' as display_name
+        "hostname": device_data.get("name"),
+        "agent_version": device_data.get("agent_version"),
+        "os_family": device_data.get("os_family"),
+        "os_name": device_data.get("os_name"),  # Now available with include_details=1
+        "os_version": device_data.get("os_version"),
+        "os_version_id": device_data.get("os_version_id"),  # Now available with include_details=1
+        "serial_number": device_data.get("serial_number"),
+        "server_group_id": device_data.get("server_group_id"),  # Now available with include_details=1
+        "connected": device_data.get("is_connected"),  # Use 'is_connected'
+        "is_compliant": device_data.get("is_compliant"),
+        "pending_patches": device_data.get("pending_patches"),
+        "needs_reboot": device_data.get("needs_reboot"),
+        "next_patch_time": format_datetime(device_data.get("next_patch_time")),  # Now available with include_next_patch_time=1
+        "last_update_time": format_datetime(device_data.get("last_update_time")),
+        "last_refresh_time": format_datetime(device_data.get("last_refresh_time")),
+        "ip_addrs": json.dumps(ip_addrs),
+        "ip_addrs_private": json.dumps(device_data.get("ip_addrs_private", [])),  # Now available with include_details=1
+        "device_detail": json.dumps(device_detail),
+        "created_at": datetime.now(pytz.UTC).isoformat(),
+        "last_updated": datetime.now(pytz.UTC).isoformat(),
+    }
+
+
+def sync_automox_devices() -> dict[str, Any]:
+    """
+    Sync Automox devices data to database for all organizations.
+
+    Returns:
+        Dictionary containing sync results and statistics
+    """
+    logger.info("Starting Automox devices sync")
+    start_time = datetime.now(pytz.UTC)
+
+    try:
+        # Initialize database schema
+        init_schema()
+
+        # Get all organizations first
+        with AutomoxApi() as api:
+            logger.info("Fetching organizations from Automox API")
+            orgs_data = api.get_all_organizations()
+
+            if not orgs_data:
+                logger.warning("No organizations found in Automox API response")
+                return {
+                    "status": "success",
+                    "devices_synced": 0,
+                    "duration_seconds": (datetime.now(pytz.UTC) - start_time).total_seconds(),
+                    "message": "No organizations found to sync devices for",
+                }
+
+            logger.info(f"Found {len(orgs_data)} organizations, syncing devices for each")
+
+            total_devices = 0
+            org_results = []
+
+            for org in orgs_data:
+                org_id = org.get("id")
+                org_name = org.get("name", "Unknown")
+
+                try:
+                    logger.info(f"Syncing devices for organization {org_name} (ID: {org_id})")
+
+                    # Get devices for this organization
+                    devices_data = api.get_all_device_details_by_organization(org_id)
+
+                    if not devices_data:
+                        logger.info(f"No devices found for organization {org_name}")
+                        continue
+
+                    # Transform data for database
+                    transformed_devices = []
+                    for device in devices_data:
+                        try:
+                            transformed_device = transform_device_data(device, org_id)
+                            transformed_devices.append(transformed_device)
+                        except Exception as e:
+                            logger.error(f"Error transforming device data: {e}")
+                            continue
+
+                    if transformed_devices:
+                        # Insert/update devices in database
+                        upsert_many("amx_devices", transformed_devices)
+                        device_count = len(transformed_devices)
+                        total_devices += device_count
+                        org_results.append({"org_id": org_id, "org_name": org_name, "devices_synced": device_count})
+                        logger.info(f"Synced {device_count} devices for {org_name}")
+
+                except Exception as e:
+                    logger.error(f"Error syncing devices for organization {org_name}: {e}")
+                    org_results.append({"org_id": org_id, "org_name": org_name, "devices_synced": 0, "error": str(e)})
+                    continue
+
+            duration = (datetime.now(pytz.UTC) - start_time).total_seconds()
+            logger.info(f"Successfully synced {total_devices} devices across {len(orgs_data)} organizations in {duration:.2f}s")
+
+            return {
+                "status": "success",
+                "devices_synced": total_devices,
+                "organizations_processed": len(orgs_data),
+                "organization_results": org_results,
+                "duration_seconds": duration,
+                "message": f"Successfully synced {total_devices} devices across {len(orgs_data)} organizations",
+            }
+
+    except AutomoxError as e:
+        error_msg = f"Automox API error: {clean_error_message(str(e))}"
+        logger.error(error_msg)
+        return {"status": "error", "error": error_msg, "duration_seconds": (datetime.now(pytz.UTC) - start_time).total_seconds()}
+
+    except Exception as e:
+        error_msg = f"Unexpected error during Automox devices sync: {clean_error_message(str(e))}"
+        logger.error(error_msg)
+        return {"status": "error", "error": error_msg, "duration_seconds": (datetime.now(pytz.UTC) - start_time).total_seconds()}
+
+
+def get_device_statistics() -> dict[str, Any]:
+    """
+    Get statistics about synced devices.
+
+    Returns:
+        Dictionary containing device statistics
+    """
+    try:
+        from db.db_client import get_connection
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # Get total device count
+        cursor.execute("SELECT COUNT(*) FROM amx_devices")
+        total_devices = cursor.fetchone()[0]
+
+        # Get connected devices
+        cursor.execute("SELECT COUNT(*) FROM amx_devices WHERE connected = 1")
+        connected_devices = cursor.fetchone()[0]
+
+        # Get compliant devices
+        cursor.execute("SELECT COUNT(*) FROM amx_devices WHERE is_compliant = 1")
+        compliant_devices = cursor.fetchone()[0]
+
+        # Get devices by OS family
+        cursor.execute("SELECT os_family, COUNT(*) FROM amx_devices WHERE os_family IS NOT NULL GROUP BY os_family")
+        os_families = dict(cursor.fetchall())
+
+        # Get devices needing reboot
+        cursor.execute("SELECT COUNT(*) FROM amx_devices WHERE needs_reboot = 1")
+        needs_reboot = cursor.fetchone()[0]
+
+        # Get total pending patches
+        cursor.execute("SELECT SUM(pending_patches) FROM amx_devices WHERE pending_patches IS NOT NULL")
+        total_pending_patches = cursor.fetchone()[0] or 0
+
+        # Get latest sync time
+        cursor.execute("SELECT MAX(last_updated) FROM amx_devices")
+        latest_sync = cursor.fetchone()[0]
+
+        conn.close()
+
+        return {
+            "total_devices": total_devices,
+            "connected_devices": connected_devices,
+            "compliant_devices": compliant_devices,
+            "needs_reboot": needs_reboot,
+            "total_pending_patches": total_pending_patches,
+            "os_families": os_families,
+            "latest_sync": latest_sync,
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting device statistics: {e}")
+        return {
+            "total_devices": 0,
+            "connected_devices": 0,
+            "compliant_devices": 0,
+            "needs_reboot": 0,
+            "total_pending_patches": 0,
+            "os_families": {},
+            "latest_sync": None,
+            "error": str(e),
+        }

@@ -163,6 +163,8 @@ class AutomoxApi:
             "vendor": device.get("detail", {}).get("VENDOR"),
             "serial_number": device.get("serial_number"),
             "os_version": device.get("os_version"),
+            "os_version_id": device.get("os_version_id"),  # Now available with include_details=1
+            "server_group_id": device.get("server_group_id"),  # Now available with include_details=1
             "pending_patches": device.get("pending_patches"),
             "last_logged_in_user": device.get("last_logged_in_user"),
             "last_process_time": format_datetime(device.get("last_process_time")),
@@ -174,7 +176,10 @@ class AutomoxApi:
             "needs_attention": device.get("needs_attention"),
             "is_compatible": device.get("is_compatible"),
             "ip_addrs": ",".join(device.get("ip_addrs", [])),
+            "ip_addrs_private": ",".join(device.get("ip_addrs_private", [])),  # Now available with include_details=1
             "os_family": device.get("os_family"),
+            "os_name": device.get("os_name"),  # Now available with include_details=1
+            "next_patch_time": format_datetime(device.get("next_patch_time")),  # Now available with include_next_patch_time=1
         }
 
     def _transform_package_data(self, package: dict[str, Any]) -> dict[str, Any]:
@@ -252,7 +257,10 @@ class AutomoxApi:
         """Fetch all device details for a specific organization."""
         devices_list = []
 
-        for page_data in self._paginate_request("servers", {"o": org_id}, limit_value=limit):
+        # Include details to get server_group_id, os_version_id, and other detailed fields
+        params = {"o": org_id, "include_details": 1, "include_server_events": 1, "include_next_patch_time": 1}
+
+        for page_data in self._paginate_request("servers", params, limit_value=limit):
             devices_list.extend([self._transform_device_data(d) for d in page_data])
 
         return devices_list

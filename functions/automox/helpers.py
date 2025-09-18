@@ -161,16 +161,16 @@ def get_organization_statistics() -> dict[str, Any]:
         return {"total_organizations": 0, "organizations_with_devices": 0, "total_devices": 0, "latest_sync": None, "error": str(e)}
 
 
-def transform_device_data(device_data: dict[str, Any], org_id: int) -> dict[str, Any]:
+def transform_device_data(device_data: dict[str, Any], org_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
     """
-    Transform raw device data from Automox API into database format.
+    Transform raw device data from Automox API into database format for both tables.
 
     Args:
         device_data: Raw device data from Automox API
         org_id: Organization ID this device belongs to
 
     Returns:
-        Transformed device data for database storage
+        Tuple of (device_data, device_details_data) for database storage
     """
     import json
 
@@ -181,8 +181,34 @@ def transform_device_data(device_data: dict[str, Any], org_id: int) -> dict[str,
     elif not ip_addrs:
         ip_addrs = []
 
-    # Create device detail object with additional info
-    device_detail = {
+    # Basic device data for amx_devices table
+    device_data_dict = {
+        "organization_id": org_id,
+        "device_id": device_data.get("id"),
+        "display_name": device_data.get("name"),  # Use 'name' as display_name
+        "agent_version": device_data.get("agent_version"),
+        "server_group_id": device_data.get("server_group_id"),  # Now available with include_details=1
+        "connected": device_data.get("is_connected"),  # Use 'is_connected'
+        "is_compliant": device_data.get("is_compliant"),
+        "pending_patches": device_data.get("pending_patches"),
+        "needs_reboot": device_data.get("needs_reboot"),
+        "next_patch_time": format_datetime(device_data.get("next_patch_time")),  # Now available with include_next_patch_time=1
+        "inventory_last_refresh_time": format_datetime(device_data.get("last_refresh_time")),
+        "ip_addrs": json.dumps(ip_addrs),
+        "ip_addrs_private": json.dumps(device_data.get("ip_addrs_private", [])),  # Now available with include_details=1
+        "created_at": datetime.now(pytz.UTC).isoformat(),
+        "last_updated": datetime.now(pytz.UTC).isoformat(),
+    }
+
+    # Detailed device data for amx_device_details table
+    device_details_dict = {
+        "organization_id": org_id,
+        "device_id": device_data.get("id"),
+        "os_family": device_data.get("os_family"),
+        "os_name": device_data.get("os_name"),  # Now available with include_details=1
+        "os_version": device_data.get("os_version"),
+        "os_version_id": device_data.get("os_version_id"),  # Now available with include_details=1
+        "serial_number": device_data.get("serial_number"),
         "model": device_data.get("model"),
         "vendor": device_data.get("vendor"),
         "version": device_data.get("version"),
@@ -190,39 +216,17 @@ def transform_device_data(device_data: dict[str, Any], org_id: int) -> dict[str,
         "mdm_profile_installed": device_data.get("mdm_profile_installed"),
         "secure_token_account": device_data.get("secure_token_account"),
         "last_logged_in_user": device_data.get("last_logged_in_user"),
-        "last_process_time": device_data.get("last_process_time"),
-        "last_disconnect_time": device_data.get("last_disconnect_time"),
+        "last_process_time": format_datetime(device_data.get("last_process_time")),
+        "last_disconnect_time": format_datetime(device_data.get("last_disconnect_time")),
         "is_delayed_by_user": device_data.get("is_delayed_by_user"),
         "needs_attention": device_data.get("needs_attention"),
         "is_compatible": device_data.get("is_compatible"),
-        "create_time": device_data.get("create_time"),
-    }
-
-    return {
-        "organization_id": org_id,
-        "device_id": device_data.get("id"),
-        "display_name": device_data.get("name"),  # Use 'name' as display_name
-        "hostname": device_data.get("name"),
-        "agent_version": device_data.get("agent_version"),
-        "os_family": device_data.get("os_family"),
-        "os_name": device_data.get("os_name"),  # Now available with include_details=1
-        "os_version": device_data.get("os_version"),
-        "os_version_id": device_data.get("os_version_id"),  # Now available with include_details=1
-        "serial_number": device_data.get("serial_number"),
-        "server_group_id": device_data.get("server_group_id"),  # Now available with include_details=1
-        "connected": device_data.get("is_connected"),  # Use 'is_connected'
-        "is_compliant": device_data.get("is_compliant"),
-        "pending_patches": device_data.get("pending_patches"),
-        "needs_reboot": device_data.get("needs_reboot"),
-        "next_patch_time": format_datetime(device_data.get("next_patch_time")),  # Now available with include_next_patch_time=1
-        "last_update_time": format_datetime(device_data.get("last_update_time")),
-        "last_refresh_time": format_datetime(device_data.get("last_refresh_time")),
-        "ip_addrs": json.dumps(ip_addrs),
-        "ip_addrs_private": json.dumps(device_data.get("ip_addrs_private", [])),  # Now available with include_details=1
-        "device_detail": json.dumps(device_detail),
+        "create_time": format_datetime(device_data.get("create_time")),
         "created_at": datetime.now(pytz.UTC).isoformat(),
         "last_updated": datetime.now(pytz.UTC).isoformat(),
     }
+
+    return device_data_dict, device_details_dict
 
 
 def sync_automox_devices() -> dict[str, Any]:
@@ -274,24 +278,36 @@ def sync_automox_devices() -> dict[str, Any]:
 
                     # Transform data for database
                     transformed_devices = []
+                    transformed_device_details = []
                     for device in devices_data:
                         try:
-                            transformed_device = transform_device_data(device, org_id)
-                            transformed_devices.append(transformed_device)
+                            device_dict, device_details_dict = transform_device_data(device, org_id)
+                            transformed_devices.append(device_dict)
+                            transformed_device_details.append(device_details_dict)
                         except Exception as e:
                             logger.error(f"Error transforming device data: {e}")
                             continue
 
                     if transformed_devices:
-                        # Insert/update devices in database
+                        # Insert/update both devices and device details in database
                         upsert_many("amx_devices", transformed_devices)
+                        upsert_many("amx_device_details", transformed_device_details)
                         device_count = len(transformed_devices)
                         total_devices += device_count
                         org_results.append({"org_id": org_id, "org_name": org_name, "devices_synced": device_count})
-                        logger.info(f"Synced {device_count} devices for {org_name}")
+                        logger.info(f"Synced {device_count} devices and details for {org_name}")
 
+                except AutomoxError as e:
+                    # Handle 403 errors gracefully (permission denied)
+                    if e.status_code == 403:
+                        logger.warning(f"Access denied for organization {org_name} (ID: {org_id}): {e}")
+                        org_results.append({"org_id": org_id, "org_name": org_name, "devices_synced": 0, "error": "Access denied (403)"})
+                    else:
+                        logger.error(f"Automox API error syncing devices for organization {org_name}: {e}")
+                        org_results.append({"org_id": org_id, "org_name": org_name, "devices_synced": 0, "error": str(e)})
+                    continue
                 except Exception as e:
-                    logger.error(f"Error syncing devices for organization {org_name}: {e}")
+                    logger.error(f"Unexpected error syncing devices for organization {org_name}: {e}")
                     org_results.append({"org_id": org_id, "org_name": org_name, "devices_synced": 0, "error": str(e)})
                     continue
 

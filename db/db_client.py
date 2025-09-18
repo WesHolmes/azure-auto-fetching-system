@@ -299,31 +299,55 @@ def init_schema():
         """
         )
 
-        # Automox Devices table - stores device data from Automox API
+        # Automox Devices table - stores basic device data from Automox API
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS amx_devices (
                 organization_id BIGINT NOT NULL,
                 device_id BIGINT NOT NULL,
                 display_name TEXT,
-                hostname TEXT,
                 agent_version TEXT,
-                os_family TEXT,
-                os_name TEXT,
-                os_version TEXT,
-                os_version_id BIGINT,
-                serial_number TEXT,
                 server_group_id BIGINT,
                 connected BOOLEAN,
                 is_compliant BOOLEAN,
                 pending_patches INTEGER,
                 needs_reboot BOOLEAN,
                 next_patch_time TIMESTAMP,
-                last_update_time TIMESTAMP,
-                last_refresh_time TIMESTAMP,
+                inventory_last_refresh_time TIMESTAMP,
                 ip_addrs TEXT,  -- JSON string for public IPs
                 ip_addrs_private TEXT,  -- JSON string for private IPs
-                device_detail TEXT,  -- JSON string for raw detail
+                created_at TIMESTAMP NOT NULL DEFAULT (datetime('now')),
+                last_updated TIMESTAMP NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (organization_id, device_id),
+                FOREIGN KEY (organization_id) REFERENCES amx_orgs(organization_id)
+            )
+        """
+        )
+
+        # Automox Device Details table - stores detailed device information
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS amx_device_details (
+                organization_id BIGINT NOT NULL,
+                device_id BIGINT NOT NULL,
+                os_family TEXT,
+                os_name TEXT,
+                os_version TEXT,
+                os_version_id BIGINT,
+                serial_number TEXT,
+                model TEXT,
+                vendor TEXT,
+                version TEXT,
+                mdm_server TEXT,
+                mdm_profile_installed BOOLEAN,
+                secure_token_account TEXT,
+                last_logged_in_user TEXT,
+                last_process_time TIMESTAMP,
+                last_disconnect_time TIMESTAMP,
+                is_delayed_by_user BOOLEAN,
+                needs_attention BOOLEAN,
+                is_compatible BOOLEAN,
+                create_time TIMESTAMP,
                 created_at TIMESTAMP NOT NULL DEFAULT (datetime('now')),
                 last_updated TIMESTAMP NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (organization_id, device_id),
@@ -355,10 +379,12 @@ def init_schema():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_orgs_connectwise ON amx_orgs(connectwise_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_orgs_display_name ON amx_orgs(display_name)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_devices_org ON amx_devices(organization_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_devices_hostname ON amx_devices(hostname)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_devices_os_family ON amx_devices(os_family)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_devices_display_name ON amx_devices(display_name)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_devices_connected ON amx_devices(connected)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_devices_compliant ON amx_devices(is_compliant)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_device_details_org ON amx_device_details(organization_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_device_details_os_family ON amx_device_details(os_family)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_device_details_serial ON amx_device_details(serial_number)")
 
         conn.commit()
         logger.info("Database schema initialized")

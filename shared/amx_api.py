@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 import backoff
+from dotenv import load_dotenv
 import pytz
 import requests
 from requests.exceptions import RequestException
@@ -14,6 +15,7 @@ from .config import load_local_settings
 
 
 # Load configuration
+load_dotenv()  # Load .env file first
 load_local_settings()
 
 logger = logging.getLogger(__name__)
@@ -140,10 +142,15 @@ class AutomoxApi:
                 time.sleep(1)
 
             except AutomoxError as e:
-                if page > 0:
+                # Handle 403 errors gracefully (permission denied)
+                if e.status_code == 403:
+                    logger.warning(f"Access denied for pagination request: {str(e)}")
+                    break
+                elif page > 0:
                     logger.warning(f"Partial data retrieved before error: {str(e)}")
                     break
-                raise
+                else:
+                    raise
 
     def _transform_device_data(self, device: dict[str, Any]) -> dict[str, Any]:
         """Transform raw device data into standardized format."""
@@ -222,7 +229,7 @@ class AutomoxApi:
         max_tries=5,
         base=2,
         factor=1.5,
-        giveup=lambda e: getattr(e, "status_code", None) not in [429, 500, 502, 503, 504],
+        giveup=lambda e: getattr(e, "status_code", None) in [401, 403, 404],
     )
     def request(self, method: str, endpoint: str, api_key: str, **kwargs) -> Any:
         url = f"{self.base_uri}{endpoint.lstrip('/')}"
@@ -242,7 +249,14 @@ class AutomoxApi:
             response.raise_for_status()
             return response.json() if response.content else None
         except RequestException as e:
-            raise AutomoxError(str(e), getattr(getattr(e, "response", None), "status_code", None))
+            # Check if it's a 403 Forbidden error (permission issue)
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            if status_code == 403:
+                # For 403 errors, raise a specific exception that can be handled gracefully
+                raise AutomoxError(f"Access denied (403): {str(e)}", status_code)
+            else:
+                # For other errors, raise as before
+                raise AutomoxError(str(e), status_code)
 
     def get_all_organizations(self) -> list[dict[str, Any]]:
         """Fetch all organizations."""

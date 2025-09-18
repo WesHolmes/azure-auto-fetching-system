@@ -197,15 +197,20 @@ def http_amx_devices_list(req: func.HttpRequest) -> func.HttpResponse:
         conn = get_connection()
         cursor = conn.cursor()
 
-        # Get all devices with organization info
+        # Get all devices with organization info and device details
         cursor.execute("""
-            SELECT d.organization_id, d.device_id, d.display_name, d.hostname, 
-                   d.agent_version, d.os_family, d.os_name, d.os_version,
-                   d.connected, d.is_compliant, d.pending_patches, d.needs_reboot,
-                   d.created_at, d.last_updated, o.display_name as org_name
+            SELECT d.organization_id, d.device_id, d.display_name, 
+                   d.agent_version, d.connected, d.is_compliant, d.pending_patches, d.needs_reboot,
+                   d.created_at, d.last_updated, o.display_name as org_name,
+                   dd.os_family, dd.os_name, dd.os_version, dd.os_version_id, dd.serial_number,
+                   dd.model, dd.vendor, dd.version, dd.mdm_server, dd.mdm_profile_installed,
+                   dd.secure_token_account, dd.last_logged_in_user, dd.last_process_time,
+                   dd.last_disconnect_time, dd.is_delayed_by_user, dd.needs_attention,
+                   dd.is_compatible, dd.create_time
             FROM amx_devices d
             LEFT JOIN amx_orgs o ON d.organization_id = o.organization_id
-            ORDER BY o.display_name, d.hostname
+            LEFT JOIN amx_device_details dd ON d.organization_id = dd.organization_id AND d.device_id = dd.device_id
+            ORDER BY o.display_name, d.display_name
         """)
 
         columns = [description[0] for description in cursor.description]

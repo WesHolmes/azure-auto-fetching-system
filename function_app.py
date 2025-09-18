@@ -1,6 +1,15 @@
 import azure.functions as func
 from dotenv import load_dotenv
 
+from functions.automox.http import (
+    http_amx_devices_list,
+    http_amx_devices_stats,
+    http_amx_devices_sync,
+    http_amx_orgs_list,
+    http_amx_orgs_stats,
+    http_amx_orgs_sync,
+)
+from functions.automox.timer import timer_amx_devices_sync, timer_amx_org_sync
 from functions.backup_radar.http import http_backup_radar_health, http_backup_radar_status, http_backup_radar_sync
 from functions.backup_radar.timer import timer_backup_radar_sync
 from functions.devices.http import get_devices, http_azure_devices_sync, http_devices_sync
@@ -55,6 +64,12 @@ app.timer_trigger(schedule="0 0 */6 * * *", arg_name="timer", run_on_startup=Fal
 # Backup Radar sync - daily at 2 AM
 app.timer_trigger(schedule="0 0 2 * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(timer_backup_radar_sync)
 
+# Automox organizations sync - daily at 3 AM
+app.timer_trigger(schedule="0 0 3 * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(timer_amx_org_sync)
+
+# Automox devices sync - daily at 4 AM
+app.timer_trigger(schedule="0 0 4 * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(timer_amx_devices_sync)
+
 # # # License analysis - every hour at minute 25
 # app.timer_trigger(schedule="0 25 * * * *", arg_name="timer", run_on_startup=False, use_monitor=False)(get_licenses_analysis)
 
@@ -88,6 +103,16 @@ app.route(route="sync/azure-devices", methods=["POST"])(http_azure_devices_sync)
 app.route(route="sync/backup-radar", methods=["POST"])(http_backup_radar_sync)
 app.route(route="backup-radar/status", methods=["GET"])(http_backup_radar_status)
 app.route(route="backup-radar/health", methods=["GET"])(http_backup_radar_health)
+
+# Automox Endpoints
+app.route(route="sync/amx/orgs", methods=["POST"])(http_amx_orgs_sync)
+app.route(route="amx/orgs", methods=["GET"])(http_amx_orgs_list)
+app.route(route="amx/orgs/stats", methods=["GET"])(http_amx_orgs_stats)
+
+# Automox Device Endpoints
+app.route(route="sync/amx/devices", methods=["POST"])(http_amx_devices_sync)
+app.route(route="amx/devices", methods=["GET"])(http_amx_devices_list)
+app.route(route="amx/devices/stats", methods=["GET"])(http_amx_devices_stats)
 
 # User Management Endpoints
 app.route(route="tenant/users/{user_id}", methods=["GET"])(get_user)

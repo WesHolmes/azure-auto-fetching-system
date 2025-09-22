@@ -356,6 +356,42 @@ def init_schema():
         """
         )
 
+        # Automox Packages table - stores package/software information
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS amx_packages (
+                organization_id BIGINT NOT NULL,
+                device_id BIGINT NOT NULL,
+                package_id BIGINT,
+                software_id BIGINT,
+                display_name TEXT NOT NULL,
+                name TEXT,
+                package_version_id BIGINT NOT NULL,
+                version TEXT,
+                repo TEXT,
+                installed BOOLEAN,
+                ignored BOOLEAN,
+                group_ignored BOOLEAN,
+                deferred_until TIMESTAMP,
+                group_deferred_until TIMESTAMP,
+                requires_reboot BOOLEAN,
+                severity TEXT,
+                cve_score NUMERIC(4,1),
+                cves TEXT,  -- JSON string for CVE list
+                is_managed BOOLEAN,
+                impact INT,
+                os_name TEXT,
+                os_version TEXT,
+                scheduled_at TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT (datetime('now')),
+                last_updated TIMESTAMP NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (organization_id, device_id, package_version_id),
+                FOREIGN KEY (organization_id) REFERENCES amx_orgs(organization_id),
+                FOREIGN KEY (organization_id, device_id) REFERENCES amx_devices(organization_id, device_id)
+            )
+        """
+        )
+
         # Basic indexes only - V2 tables
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_usersV2_tenant ON usersV2(tenant_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_licenses_tenant ON licenses(tenant_id)")
@@ -385,6 +421,11 @@ def init_schema():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_device_details_org ON amx_device_details(organization_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_device_details_os_family ON amx_device_details(os_family)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_device_details_serial ON amx_device_details(serial_number)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_packages_org ON amx_packages(organization_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_packages_device ON amx_packages(organization_id, device_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_packages_display_name ON amx_packages(display_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_packages_installed ON amx_packages(installed)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_amx_packages_severity ON amx_packages(severity)")
 
         conn.commit()
         logger.info("Database schema initialized")

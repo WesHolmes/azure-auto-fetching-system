@@ -399,3 +399,247 @@ def get_device_statistics() -> dict[str, Any]:
             "latest_sync": None,
             "error": str(e),
         }
+
+
+def transform_package_data(package_data: dict[str, Any], org_id: int, device_id: int) -> dict[str, Any]:
+    """
+    Transform raw package data from Automox API into database format.
+
+    Args:
+        package_data: Raw package data from Automox API
+        org_id: Organization ID this package belongs to
+        device_id: Device ID this package belongs to
+
+    Returns:
+        Transformed package data for database storage
+    """
+    import json
+
+    # Handle CVE list - convert to JSON string if it's a list
+    cves = package_data.get("cves", [])
+    if isinstance(cves, list):
+        cves_json = json.dumps(cves)
+    else:
+        cves_json = json.dumps([]) if not cves else str(cves)
+
+    return {
+        "organization_id": org_id,
+        "device_id": device_id,
+        "package_id": package_data.get("package_id"),
+        "software_id": package_data.get("software_id"),
+        "display_name": package_data.get("display_name", "Unknown Package"),
+        "name": package_data.get("name"),
+        "package_version_id": package_data.get("package_version_id"),
+        "version": package_data.get("version"),
+        "repo": package_data.get("repo"),
+        "installed": package_data.get("installed"),
+        "ignored": package_data.get("ignored"),
+        "group_ignored": package_data.get("group_ignored"),
+        "deferred_until": format_datetime(package_data.get("deferred_until")),
+        "group_deferred_until": format_datetime(package_data.get("group_deferred_until")),
+        "requires_reboot": package_data.get("requires_reboot"),
+        "severity": package_data.get("severity"),
+        "cve_score": package_data.get("cve_score"),
+        "cves": cves_json,
+        "is_managed": package_data.get("is_managed"),
+        "impact": package_data.get("impact"),
+        "os_name": package_data.get("os_name"),
+        "os_version": package_data.get("os_version"),
+        "scheduled_at": format_datetime(package_data.get("patch_time")),
+        "created_at": datetime.now(pytz.UTC).isoformat(),
+        "last_updated": datetime.now(pytz.UTC).isoformat(),
+    }
+
+
+def sync_automox_packages() -> dict[str, Any]:
+    """
+    Sync Automox packages data to database for all organizations.
+
+    Returns:
+        Dictionary containing sync results and statistics
+    """
+    logger.info("Starting Automox packages sync")
+    start_time = datetime.now(pytz.UTC)
+
+    try:
+        # Initialize database schema
+        init_schema()
+
+        # Get all organizations first
+        with AutomoxApi() as api:
+            logger.info("Fetching organizations from Automox API")
+            orgs_data = api.get_all_organizations()
+
+            if not orgs_data:
+                logger.warning("No organizations found in Automox API response")
+                return {
+                    "status": "success",
+                    "packages_synced": 0,
+                    "duration_seconds": (datetime.now(pytz.UTC) - start_time).total_seconds(),
+                    "message": "No organizations found to sync packages for",
+                }
+
+            logger.info(f"Found {len(orgs_data)} organizations, syncing packages for each")
+
+            total_packages = 0
+            org_results = []
+
+            for org in orgs_data:
+                org_id = org.get("id")
+                org_name = org.get("name", "Unknown")
+
+                try:
+                    logger.info(f"Syncing packages for organization {org_name} (ID: {org_id})")
+
+                    # Get packages for this organization
+                    packages_data = api.get_packages_by_organization(org_id, org_name)
+
+                    if not packages_data:
+                        logger.info(f"No packages found for organization {org_name}")
+                        continue
+
+                    # Transform data for database
+                    transformed_packages = []
+                    for package in packages_data:
+                        try:
+                            # Extract device_id from package data
+                            device_id = package.get("server_id")
+                            if not device_id:
+                                logger.warning(f"Package missing server_id, skipping: {package.get('display_name', 'Unknown')}")
+                                continue
+
+                            transformed_package = transform_package_data(package, org_id, device_id)
+                            transformed_packages.append(transformed_package)
+                        except Exception as e:
+                            logger.error(f"Error transforming package data: {e}")
+                            continue
+
+                    if transformed_packages:
+                        # Insert/update packages in database
+                        upsert_many("amx_packages", transformed_packages)
+                        package_count = len(transformed_packages)
+                        total_packages += package_count
+                        org_results.append({"org_id": org_id, "org_name": org_name, "packages_synced": package_count})
+                        logger.info(f"Synced {package_count} packages for {org_name}")
+
+                except AutomoxError as e:
+                    # Handle 403 errors gracefully (permission denied)
+                    if e.status_code == 403:
+                        logger.warning(f"Access denied for organization {org_name} (ID: {org_id}): {e}")
+                        org_results.append({"org_id": org_id, "org_name": org_name, "packages_synced": 0, "error": "Access denied (403)"})
+                    else:
+                        logger.error(f"Automox API error syncing packages for organization {org_name}: {e}")
+                        org_results.append({"org_id": org_id, "org_name": org_name, "packages_synced": 0, "error": str(e)})
+                    continue
+                except Exception as e:
+                    logger.error(f"Unexpected error syncing packages for organization {org_name}: {e}")
+                    org_results.append({"org_id": org_id, "org_name": org_name, "packages_synced": 0, "error": str(e)})
+                    continue
+
+            duration = (datetime.now(pytz.UTC) - start_time).total_seconds()
+            logger.info(f"Successfully synced {total_packages} packages across {len(orgs_data)} organizations in {duration:.2f}s")
+
+            return {
+                "status": "success",
+                "packages_synced": total_packages,
+                "organizations_processed": len(orgs_data),
+                "organization_results": org_results,
+                "duration_seconds": duration,
+                "message": f"Successfully synced {total_packages} packages across {len(orgs_data)} organizations",
+            }
+
+    except AutomoxError as e:
+        error_msg = f"Automox API error: {clean_error_message(str(e))}"
+        logger.error(error_msg)
+        return {
+            "status": "error",
+            "packages_synced": 0,
+            "duration_seconds": (datetime.now(pytz.UTC) - start_time).total_seconds(),
+            "message": error_msg,
+        }
+    except Exception as e:
+        error_msg = f"Unexpected error: {clean_error_message(str(e))}"
+        logger.error(error_msg)
+        return {
+            "status": "error",
+            "packages_synced": 0,
+            "duration_seconds": (datetime.now(pytz.UTC) - start_time).total_seconds(),
+            "message": error_msg,
+        }
+
+
+def get_package_statistics() -> dict[str, Any]:
+    """
+    Get statistics from the amx_packages table.
+
+    Returns:
+        Dictionary containing package statistics
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # Get total packages count
+        cursor.execute("SELECT COUNT(*) FROM amx_packages")
+        total_packages = cursor.fetchone()[0]
+
+        # Get installed packages count
+        cursor.execute("SELECT COUNT(*) FROM amx_packages WHERE installed = 1")
+        installed_packages = cursor.fetchone()[0]
+
+        # Get packages by severity
+        cursor.execute("""
+            SELECT severity, COUNT(*) as count 
+            FROM amx_packages 
+            WHERE severity IS NOT NULL 
+            GROUP BY severity 
+            ORDER BY count DESC
+        """)
+        severity_counts = dict(cursor.fetchall())
+
+        # Get packages by repository
+        cursor.execute("""
+            SELECT repo, COUNT(*) as count 
+            FROM amx_packages 
+            WHERE repo IS NOT NULL 
+            GROUP BY repo 
+            ORDER BY count DESC
+        """)
+        repo_counts = dict(cursor.fetchall())
+
+        # Get packages requiring reboot
+        cursor.execute("SELECT COUNT(*) FROM amx_packages WHERE requires_reboot = 1")
+        requires_reboot = cursor.fetchone()[0]
+
+        # Get packages with CVEs
+        cursor.execute("SELECT COUNT(*) FROM amx_packages WHERE cve_score IS NOT NULL AND cve_score > 0")
+        packages_with_cves = cursor.fetchone()[0]
+
+        # Get latest sync time
+        cursor.execute("SELECT MAX(last_updated) FROM amx_packages")
+        latest_sync = cursor.fetchone()[0]
+
+        conn.close()
+
+        return {
+            "total_packages": total_packages,
+            "installed_packages": installed_packages,
+            "requires_reboot": requires_reboot,
+            "packages_with_cves": packages_with_cves,
+            "severity_breakdown": severity_counts,
+            "repository_breakdown": repo_counts,
+            "latest_sync": latest_sync,
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting package statistics: {e}")
+        return {
+            "total_packages": 0,
+            "installed_packages": 0,
+            "requires_reboot": 0,
+            "packages_with_cves": 0,
+            "severity_breakdown": {},
+            "repository_breakdown": {},
+            "latest_sync": None,
+            "error": str(e),
+        }

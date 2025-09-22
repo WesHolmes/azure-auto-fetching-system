@@ -5,8 +5,10 @@ import azure.functions as func
 from functions.automox.helpers import (
     get_device_statistics,
     get_organization_statistics,
+    get_package_statistics,
     sync_automox_devices,
     sync_automox_organizations,
+    sync_automox_packages,
 )
 from shared.utils import create_error_response, create_success_response
 
@@ -231,4 +233,115 @@ def http_amx_devices_list(req: func.HttpRequest) -> func.HttpResponse:
         logger.error(error_msg)
         return create_error_response(
             error_message=error_msg, status_code=500, tenant_id="automox", tenant_name="Automox", operation="list_devices"
+        )
+
+
+def http_amx_packages_sync(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    HTTP trigger for manual Automox packages sync.
+    Manually triggers the sync of packages data from Automox API.
+    """
+    logger.info("Manual Automox packages sync requested")
+
+    try:
+        # Sync packages data
+        result = sync_automox_packages()
+
+        if result["status"] == "success":
+            logger.info(f"Packages sync completed: {result['packages_synced']} packages synced")
+            return create_success_response(
+                data=result,
+                tenant_id="automox",
+                tenant_name="Automox",
+                operation="sync_packages",
+                message=f"Successfully synced {result['packages_synced']} packages",
+            )
+        else:
+            error_msg = result.get("message", "Unknown error during packages sync")
+            logger.error(f"Packages sync failed: {error_msg}")
+            return create_error_response(
+                error_message=error_msg, status_code=500, tenant_id="automox", tenant_name="Automox", operation="sync_packages"
+            )
+
+    except Exception as e:
+        error_msg = f"Error during packages sync: {str(e)}"
+        logger.error(error_msg)
+        return create_error_response(
+            error_message=error_msg, status_code=500, tenant_id="automox", tenant_name="Automox", operation="sync_packages"
+        )
+
+
+def http_amx_packages_list(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    HTTP trigger to list all Automox packages.
+    Returns all packages with organization and device information.
+    """
+    try:
+        from db.db_client import get_connection
+
+        logger.info("Fetching all Automox packages")
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # Get all packages with organization and device info
+        cursor.execute("""
+            SELECT p.organization_id, p.device_id, p.package_id, p.software_id,
+                   p.display_name, p.name, p.package_version_id, p.version, p.repo,
+                   p.installed, p.ignored, p.group_ignored, p.deferred_until,
+                   p.group_deferred_until, p.requires_reboot, p.severity, p.cve_score,
+                   p.cves, p.is_managed, p.impact, p.os_name, p.os_version,
+                   p.scheduled_at, p.created_at, p.last_updated,
+                   o.display_name as org_name, d.display_name as device_name
+            FROM amx_packages p
+            LEFT JOIN amx_orgs o ON p.organization_id = o.organization_id
+            LEFT JOIN amx_devices d ON p.organization_id = d.organization_id AND p.device_id = d.device_id
+            ORDER BY o.display_name, d.display_name, p.display_name
+        """)
+
+        columns = [description[0] for description in cursor.description]
+        packages = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        conn.close()
+
+        return create_success_response(
+            data=packages,
+            tenant_id="automox",
+            tenant_name="Automox",
+            operation="list_packages",
+            message=f"Retrieved {len(packages)} packages",
+        )
+
+    except Exception as e:
+        error_msg = f"Error fetching packages list: {str(e)}"
+        logger.error(error_msg)
+        return create_error_response(
+            error_message=error_msg, status_code=500, tenant_id="automox", tenant_name="Automox", operation="list_packages"
+        )
+
+
+def http_amx_packages_stats(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    HTTP trigger to get Automox packages statistics.
+    Returns comprehensive statistics about packages data.
+    """
+    try:
+        logger.info("Fetching Automox packages statistics")
+
+        # Get package statistics
+        stats = get_package_statistics()
+
+        return create_success_response(
+            data=stats,
+            tenant_id="automox",
+            tenant_name="Automox",
+            operation="packages_stats",
+            message="Packages statistics retrieved successfully",
+        )
+
+    except Exception as e:
+        error_msg = f"Error fetching packages statistics: {str(e)}"
+        logger.error(error_msg)
+        return create_error_response(
+            error_message=error_msg, status_code=500, tenant_id="automox", tenant_name="Automox", operation="packages_stats"
         )

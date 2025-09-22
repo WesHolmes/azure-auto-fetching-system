@@ -445,7 +445,7 @@ def transform_package_data(package_data: dict[str, Any], org_id: int, device_id:
         "impact": package_data.get("impact"),
         "os_name": package_data.get("os_name"),
         "os_version": package_data.get("os_version"),
-        "scheduled_at": format_datetime(package_data.get("patch_time")),
+        "scheduled_at": None,  # patchTime only available in /reports/prepatch endpoint, not in /orgs/{id}/packages
         "created_at": datetime.now(pytz.UTC).isoformat(),
         "last_updated": datetime.now(pytz.UTC).isoformat(),
     }

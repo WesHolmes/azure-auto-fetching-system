@@ -220,8 +220,6 @@ class AutomoxApi:
             "secondary_id": package.get("secondary_id"),
             "is_managed": package.get("is_managed"),
             "impact": package.get("impact"),
-            "deferred_until": package.get("deferred_until"),
-            "group_deferred_until": package.get("group_deferred_until"),
             "is_deleted": 0,
         }
 

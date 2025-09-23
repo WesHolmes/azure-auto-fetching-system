@@ -400,7 +400,9 @@ def get_device_statistics() -> dict[str, Any]:
         }
 
 
-def transform_package_data(package_data: dict[str, Any], org_id: int, device_id: int) -> dict[str, Any]:
+def transform_package_data(
+    package_data: dict[str, Any], org_id: int, device_id: int, patch_time_mapping: dict[str, str] = None
+) -> dict[str, Any]:
     """
     Transform raw package data from Automox API into database format.
 
@@ -408,6 +410,7 @@ def transform_package_data(package_data: dict[str, Any], org_id: int, device_id:
         package_data: Raw package data from Automox API
         org_id: Organization ID this package belongs to
         device_id: Device ID this package belongs to
+        patch_time_mapping: Optional mapping of package_version_id to patch_time from prepatch report
 
     Returns:
         Transformed package data for database storage
@@ -442,10 +445,43 @@ def transform_package_data(package_data: dict[str, Any], org_id: int, device_id:
         "impact": package_data.get("impact"),
         "os_name": package_data.get("os_name"),
         "os_version": package_data.get("os_version"),
-        "scheduled_at": None,  # patchTime only available in /reports/prepatch endpoint, not in /orgs/{id}/packages
+        "scheduled_at": format_datetime(patch_time_mapping.get(str(package_data.get("package_version_id"))))
+        if patch_time_mapping
+        else None,
         "created_at": datetime.now(pytz.UTC).isoformat(),
         "last_updated": datetime.now(pytz.UTC).isoformat(),
     }
+
+
+def create_package_patch_time_mapping(prepatch_data: dict[str, Any]) -> dict[str, str]:
+    """
+    Create a mapping from package_version_id to patch_time from prepatch report.
+
+    Args:
+        prepatch_data: Prepatch report data from Automox API
+
+    Returns:
+        Dictionary mapping package_version_id to patch_time (ISO format)
+    """
+    patch_time_mapping = {}
+
+    if not prepatch_data or "prepatch" not in prepatch_data:
+        return patch_time_mapping
+
+    devices = prepatch_data["prepatch"].get("devices", [])
+
+    for device in devices:
+        patches = device.get("patches", [])
+        for patch in patches:
+            package_version_id = patch.get("packageVersionId")
+            patch_time = patch.get("patchTime")
+
+            if package_version_id and patch_time:
+                # Convert patch_time to ISO format if needed
+                patch_time_mapping[str(package_version_id)] = patch_time
+
+    logger.info(f"Created patch time mapping for {len(patch_time_mapping)} packages")
+    return patch_time_mapping
 
 
 def sync_automox_packages() -> dict[str, Any]:
@@ -495,6 +531,15 @@ def sync_automox_packages() -> dict[str, Any]:
                         logger.info(f"No packages found for organization {org_name}")
                         continue
 
+                    # Get prepatch report for this organization to get patch times
+                    logger.info(f"Fetching prepatch report for organization {org_name}")
+                    try:
+                        prepatch_data = api.get_prepatch_report(org_id)
+                        patch_time_mapping = create_package_patch_time_mapping(prepatch_data)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch prepatch report for {org_name}: {e}")
+                        patch_time_mapping = {}
+
                     # Transform data for database
                     transformed_packages = []
                     for package in packages_data:
@@ -505,7 +550,7 @@ def sync_automox_packages() -> dict[str, Any]:
                                 logger.warning(f"Package missing server_id, skipping: {package.get('display_name', 'Unknown')}")
                                 continue
 
-                            transformed_package = transform_package_data(package, org_id, device_id)
+                            transformed_package = transform_package_data(package, org_id, device_id, patch_time_mapping)
                             transformed_packages.append(transformed_package)
                         except Exception as e:
                             logger.error(f"Error transforming package data: {e}")

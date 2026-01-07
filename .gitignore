@@ -144,3 +144,6 @@ CLAUDE.md
 archive/
 sqlite.db
 sqlite.db-journal
+
+data/
+query_devices.sql
